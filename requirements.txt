@@ -6,6 +6,9 @@ pandas>=2.0.0
 scikit-learn>=1.3.0
 scipy>=1.10.0
 
+# Thai NLP & Text Tokenization
+pythainlp>=5.0.0
+
 # Machine Learning & Optimization
 xgboost>=2.0.0
 lightgbm>=4.0.0
