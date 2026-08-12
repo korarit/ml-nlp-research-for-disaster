@@ -43,8 +43,9 @@ def parse_arguments():
     parser.add_argument("--use_gpu", type=str2bool, default=True,
                         help="Enable GPU acceleration (true/false)")
     parser.add_argument("--run_id", type=str, default="run_02_autotune_hyperparams",
-                        choices=["run_01_baseline_default", "run_02_autotune_hyperparams", "run_03_final_luna_benchmark"],
-                        help="Experiment run ID directory")
+                        help="Experiment run ID directory (e.g. run_01_baseline_default, run_02_autotune_hyperparams, or custom name)")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Custom base directory to save results. Default: results/classical_ml/tuning_history/<run_id>")
     parser.add_argument("--n_trials", type=int, default=15,
                         help="Number of Optuna tuning trials per model")
     parser.add_argument("--cv_folds", type=int, default=5,
@@ -67,7 +68,14 @@ def main():
     args = parse_arguments()
     notifier = DiscordNotifier(webhook_url=args.discord_webhook)
     
-    base_output_dir = os.path.join("results", "classical_ml", "tuning_history", args.run_id)
+    if args.output_dir:
+        if os.path.basename(os.path.normpath(args.output_dir)) == args.run_id:
+            base_output_dir = args.output_dir
+        else:
+            base_output_dir = os.path.join(args.output_dir, args.run_id)
+    else:
+        base_output_dir = os.path.join("results", "classical_ml", "tuning_history", args.run_id)
+        
     os.makedirs(base_output_dir, exist_ok=True)
     
     print("==========================================================================")
