@@ -1,0 +1,6 @@
+[
+  {
+    "note": "Single model tested, minimum 2 models required for McNemar pairwise comparison.",
+    "model": "LogisticRegression"
+  }
+]

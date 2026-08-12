@@ -1,0 +1,22 @@
+# Environment variables and secret tokens
+.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.optuna/
+
+# Virtual environment
+env/
+venv/
+ENV/
+
+# Results & outputs (keep directory structure if needed)
+# results/
+
+# OS/IDE specific files
+.DS_Store
+.vscode/
+.idea/

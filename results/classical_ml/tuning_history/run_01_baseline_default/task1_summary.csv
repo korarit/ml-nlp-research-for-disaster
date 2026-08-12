@@ -1,0 +1,2 @@
+model,cv_f1_mean,cv_f1_std,cv_f2_mean,cv_f2_std,luna_f1,luna_f2,luna_accuracy,luna_precision,luna_recall,luna_mcc,gpu_p95_latency_ms,gpu_qps,cpu_p95_latency_ms,cpu_qps
+LogisticRegression,0.9990328820116054,0.0013677113756026369,0.9984544049459041,0.002185801487439128,1.0,1.0,1.0,1.0,1.0,1.0,0.8280900019599358,1247.1471493357437,1.2654750014917222,1040.550242615517
