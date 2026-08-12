@@ -181,7 +181,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return ExtraTreesClassifier(**p)
         
     elif m == "AdaBoostClassifier":
-        p = {"random_state": random_state, **kwargs}
+        p = {"algorithm": "SAMME", "random_state": random_state, **kwargs}
         return AdaBoostClassifier(**p)
         
     elif m == "GradientBoostingClassifier":
