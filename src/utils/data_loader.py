@@ -9,8 +9,10 @@ import numpy as np
 import pandas as pd
 from typing import Tuple, Dict, List, Any
 
-DEFAULT_GEMINI_PATH = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
-DEFAULT_LUNA_PATH = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset.csv"
+# Train dataset
+DEFAULT_GEMINI_PATH = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset_v2.csv"
+# Test dataset
+DEFAULT_LUNA_PATH = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
 
 COUNT_COLUMNS = [
     "gt_dead", "gt_critical", "gt_urgent", "gt_safe",
