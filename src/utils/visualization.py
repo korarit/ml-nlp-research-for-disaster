@@ -105,23 +105,28 @@ def plot_05_feature_importance(features: List[str], importances: List[float], ou
     plt.close()
 
 
-def plot_06_gemini_val_vs_luna_test(df_gap: pd.DataFrame, output_path: str):
-    """Plot 6: Cross-Generator Performance Gap Comparison Chart (Gemini CV vs Luna Test)."""
+def plot_06_cv_val_vs_test(df_gap: pd.DataFrame, output_path: str):
+    """Plot 6: Cross-Dataset Performance Gap Comparison Chart (5-Fold CV vs Held-out Test)."""
     fig, ax = plt.subplots(figsize=(9, 5))
-    if "model" in df_gap.columns and "cv_score" in df_gap.columns and "luna_score" in df_gap.columns:
+    test_score_col = "test_score" if "test_score" in df_gap.columns else ("luna_score" if "luna_score" in df_gap.columns else None)
+    if "model" in df_gap.columns and "cv_score" in df_gap.columns and test_score_col:
         x = np.arange(len(df_gap))
         width = 0.35
         
-        ax.bar(x - width/2, df_gap["cv_score"], width, label="Gemini 5-Fold CV", color="#4292c6")
-        ax.bar(x + width/2, df_gap["luna_score"], width, label="Luna Test (Out-of-Distribution)", color="#ef3b2c")
+        ax.bar(x - width/2, df_gap["cv_score"], width, label="5-Fold CV", color="#4292c6")
+        ax.bar(x + width/2, df_gap[test_score_col], width, label="Held-out Test", color="#ef3b2c")
         
         ax.set_xticks(x)
         ax.set_xticklabels(df_gap["model"], rotation=30, ha="right")
         ax.set_ylabel("F1 / Score")
-        ax.set_title("Cross-Generator Performance Gap (Gemini CV vs Luna Test)", fontsize=12, fontweight="bold")
+        ax.set_title("Cross-Dataset Performance Gap (5-Fold CV vs Held-out Test)", fontsize=12, fontweight="bold")
         ax.set_ylim(0.0, 1.05)
         ax.legend()
         plt.tight_layout()
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         plt.savefig(output_path, dpi=300)
     plt.close()
+
+
+# Legacy alias for backwards compatibility
+plot_06_gemini_val_vs_luna_test = plot_06_cv_val_vs_test

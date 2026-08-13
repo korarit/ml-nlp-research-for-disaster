@@ -30,15 +30,15 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 def run_task1_cv(
-    gemini_df: pd.DataFrame,
+    train_df: pd.DataFrame,
     model_name: str,
     hyperparams: Optional[Dict[str, Any]] = None,
     n_splits: int = 5,
     use_gpu: bool = True
 ) -> Dict[str, Any]:
     """Runs 5-Fold Stratified Cross-Validation for Task 1 with strict leakage prevention."""
-    X = gemini_df["generated_text"].values
-    y = gemini_df["gt_is_help_request_num"].values
+    X = train_df["generated_text"].values
+    y = train_df["gt_is_help_request_num"].values
     
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold_metrics = []
@@ -87,7 +87,7 @@ def run_task1_cv(
 
 
 def optimize_task1_model(
-    gemini_df: pd.DataFrame,
+    train_df: pd.DataFrame,
     model_name: str,
     n_trials: int = 15,
     use_gpu: bool = True
@@ -132,7 +132,7 @@ def optimize_task1_model(
             params["learning_rate"] = trial.suggest_float("learning_rate", 0.01, 0.2, log=True)
             params["max_depth"] = trial.suggest_int("max_depth", 3, 6)
 
-        res = run_task1_cv(gemini_df, model_name, hyperparams=params, use_gpu=use_gpu)
+        res = run_task1_cv(train_df, model_name, hyperparams=params, use_gpu=use_gpu)
         score = 0.5 * res["mean_f1"] + 0.5 * res["mean_f2"]
         trials_log.append({"trial": trial.number, "score": score, "f1": res["mean_f1"], "f2": res["mean_f2"], "params": params})
         return score
@@ -160,17 +160,17 @@ def execute_task1_pipeline(
     notifier: Optional[Any] = None
 ) -> pd.DataFrame:
     """Executes full Task 1 Pipeline with incremental auto-checkpointing and auto-skip support."""
-    gemini_df, luna_df = load_all_datasets()
+    train_df, test_df = load_all_datasets()
     models_to_run = selected_models or (["SimpleKeywordRules"] + ALL_CLASSIFIER_NAMES)
     
     summary_results = []
-    luna_predictions = {}
+    test_predictions = {}
     best_configs = {}
     
-    X_train_full = gemini_df["generated_text"].values
-    y_train_full = gemini_df["gt_is_help_request_num"].values
-    X_luna = luna_df["generated_text"].values
-    y_luna = luna_df["gt_is_help_request_num"].values
+    X_train_full = train_df["generated_text"].values
+    y_train_full = train_df["gt_is_help_request_num"].values
+    X_test = test_df["generated_text"].values
+    y_test = test_df["gt_is_help_request_num"].values
     
     os.makedirs(os.path.join(output_dir, "best_configs"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
@@ -205,16 +205,16 @@ def execute_task1_pipeline(
             try:
                 if m_name == "SimpleKeywordRules":
                     engine = SimpleKeywordRules()
-                    luna_preds = engine.predict(list(X_luna))
+                    test_preds = engine.predict(list(X_test))
                 else:
                     vectorizer = create_tfidf_vectorizer(use_hybrid=True)
                     clf = get_classifier(m_name, use_gpu=use_gpu, **best_configs[m_name])
                     pipe = Pipeline([("tfidf", vectorizer), ("clf", clf)])
                     pipe.fit(X_train_full, y_train_full)
-                    luna_preds = pipe.predict(X_luna)
-                luna_predictions[m_name] = np.array(luna_preds)
+                    test_preds = pipe.predict(X_test)
+                test_predictions[m_name] = np.array(test_preds)
             except Exception as e:
-                print(f"Warning: Failed to regenerate Luna predictions for skipped model {m_name}: {e}")
+                print(f"Warning: Failed to regenerate predictions for skipped model {m_name}: {e}")
             continue
 
         print(f"--- Task 1 Running: {m_name} ---")
@@ -223,10 +223,10 @@ def execute_task1_pipeline(
         # Step 1: 5-Fold CV & Auto-tuning
         if m_name == "SimpleKeywordRules" or m_name == "DummyClassifier":
             best_p = {}
-            cv_res = run_task1_cv(gemini_df, m_name, n_splits=n_splits, use_gpu=use_gpu)
+            cv_res = run_task1_cv(train_df, m_name, n_splits=n_splits, use_gpu=use_gpu)
         else:
-            best_p, trials_df = optimize_task1_model(gemini_df, m_name, n_trials=n_trials, use_gpu=use_gpu)
-            cv_res = run_task1_cv(gemini_df, m_name, hyperparams=best_p, n_splits=n_splits, use_gpu=use_gpu)
+            best_p, trials_df = optimize_task1_model(train_df, m_name, n_trials=n_trials, use_gpu=use_gpu)
+            cv_res = run_task1_cv(train_df, m_name, hyperparams=best_p, n_splits=n_splits, use_gpu=use_gpu)
             
             # Save Optuna trial log for model
             trials_df.to_json(os.path.join(output_dir, "logs", f"trials_task1_{m_name}.json"), orient="records", indent=2)
@@ -238,21 +238,21 @@ def execute_task1_pipeline(
         with open(os.path.join(output_dir, "best_configs", f"best_params_task1_{m_name}.json"), "w", encoding="utf-8") as f:
             json.dump(best_p, f, indent=2)
             
-        # Step 2: Re-fit on full Gemini & Test on Luna
+        # Step 2: Re-fit on full training set & Test on held-out test set
         if m_name == "SimpleKeywordRules":
             engine = SimpleKeywordRules()
-            luna_preds = engine.predict(list(X_luna))
+            test_preds = engine.predict(list(X_test))
             predict_fn = engine.predict_one
         else:
             vectorizer = create_tfidf_vectorizer(use_hybrid=True)
             clf = get_classifier(m_name, use_gpu=use_gpu, **best_p)
             pipe = Pipeline([("tfidf", vectorizer), ("clf", clf)])
             pipe.fit(X_train_full, y_train_full)
-            luna_preds = pipe.predict(X_luna)
+            test_preds = pipe.predict(X_test)
             predict_fn = lambda txt: pipe.predict([txt])[0]
             
-        luna_predictions[m_name] = np.array(luna_preds)
-        luna_metrics = compute_classification_metrics(y_luna, np.array(luna_preds))
+        test_predictions[m_name] = np.array(test_preds)
+        test_metrics = compute_classification_metrics(y_test, np.array(test_preds))
         
         # Step 3: Latency Measurement
         lat_gpu = measure_inference_latency(predict_fn, n_runs=min(latency_runs, 200), use_gpu=True) if use_gpu else {"p95_latency_ms": 0.0, "qps": 0.0}
@@ -264,9 +264,9 @@ def execute_task1_pipeline(
             "model": m_name,
             "cv_f1_mean": cv_res["mean_f1"], "cv_f1_std": cv_res["std_f1"],
             "cv_f2_mean": cv_res["mean_f2"], "cv_f2_std": cv_res["std_f2"],
-            "luna_f1": luna_metrics["f1"], "luna_f2": luna_metrics["f2"],
-            "luna_accuracy": luna_metrics["accuracy"], "luna_precision": luna_metrics["precision"],
-            "luna_recall": luna_metrics["recall"], "luna_mcc": luna_metrics["mcc"],
+            "luna_f1": test_metrics["f1"], "luna_f2": test_metrics["f2"],
+            "luna_accuracy": test_metrics["accuracy"], "luna_precision": test_metrics["precision"],
+            "luna_recall": test_metrics["recall"], "luna_mcc": test_metrics["mcc"],
             "gpu_p95_latency_ms": lat_gpu["p95_latency_ms"], "gpu_qps": lat_gpu["qps"],
             "cpu_p95_latency_ms": lat_cpu["p95_latency_ms"], "cpu_qps": lat_cpu["qps"]
         }
@@ -284,8 +284,8 @@ def execute_task1_pipeline(
                 metrics={
                     "CV Mean F1": row["cv_f1_mean"],
                     "CV Mean F2": row["cv_f2_mean"],
-                    "Luna Test F1": row["luna_f1"],
-                    "Luna Test F2": row["luna_f2"],
+                    "Test F1": row["luna_f1"],
+                    "Test F2": row["luna_f2"],
                     "CPU Latency P95 (ms)": row["cpu_p95_latency_ms"]
                 },
                 elapsed_sec=elapsed_sec
@@ -297,10 +297,10 @@ def execute_task1_pipeline(
         json.dump(best_configs, f, indent=2)
         
     # Step 4: Statistical Significance Tests (McNemar + Holm)
-    if len(luna_predictions) >= 2:
-        stat_results = run_pairwise_model_stat_tests(y_luna, luna_predictions, is_regression=False)
+    if len(test_predictions) >= 2:
+        stat_results = run_pairwise_model_stat_tests(y_test, test_predictions, is_regression=False)
     else:
-        stat_results = [{"note": "Single model tested, minimum 2 models required for McNemar pairwise comparison.", "model": list(luna_predictions.keys())[0]}]
+        stat_results = [{"note": "Single model tested, minimum 2 models required for McNemar pairwise comparison.", "model": list(test_predictions.keys())[0]}]
         
     with open(os.path.join(output_dir, "stat_tests", "task1_mcnemar_holm.json"), "w", encoding="utf-8") as f:
         json.dump(stat_results, f, indent=2)
@@ -333,8 +333,7 @@ def execute_task1_pipeline(
         best_row = summary_df.loc[summary_df["luna_f1"].idxmax()]
         notifier.notify_task_complete(
             task_name="Task 1: Classification",
-            summary_info=f"Evaluated `{len(summary_df)}` models.\n🏆 **Top Classifier**: `{best_row['model']}` (Luna F1: `{best_row['luna_f1']:.4f}`, F2: `{best_row['luna_f2']:.4f}`)"
+            summary_info=f"Evaluated `{len(summary_df)}` models.\n🏆 **Top Classifier**: `{best_row['model']}` (Test F1: `{best_row['luna_f1']:.4f}`, F2: `{best_row['luna_f2']:.4f}`)"
         )
     
     return summary_df
-

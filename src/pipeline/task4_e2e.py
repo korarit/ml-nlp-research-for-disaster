@@ -55,14 +55,14 @@ class FullIntegratedDisasterPipeline:
         ])
         self.is_fitted = False
         
-    def fit(self, gemini_df: pd.DataFrame):
-        """Fits Task 1 and Task 3 models on Gemini training set."""
-        X_tr = gemini_df["generated_text"].values
-        y_tr_help = gemini_df["gt_is_help_request_num"].values
+    def fit(self, train_df: pd.DataFrame):
+        """Fits Task 1 and Task 3 models on training set."""
+        X_tr = train_df["generated_text"].values
+        y_tr_help = train_df["gt_is_help_request_num"].values
         self.task1_pipe.fit(X_tr, y_tr_help)
         
         # Extract triage training samples
-        pedia_df, adult_df = extract_triage_data_by_age(gemini_df)
+        pedia_df, adult_df = extract_triage_data_by_age(train_df)
         
         if len(pedia_df) > 5:
             self.pedia_triage_pipe.fit(pedia_df["symptoms_literal"].values, pedia_df["triage_color"].values)
@@ -157,8 +157,8 @@ def execute_task4_e2e_pipeline(
     force: bool = False,
     notifier: Optional[Any] = None
 ) -> Dict[str, Any]:
-    """Executes full Task 4 End-to-End Integrated Pipeline Benchmark on Luna dataset with auto-skip support."""
-    gemini_df, luna_df = load_all_datasets()
+    """Executes full Task 4 End-to-End Integrated Pipeline Benchmark on held-out test dataset with auto-skip support."""
+    train_df, test_df = load_all_datasets()
     
     out_json_path = os.path.join(output_dir, "task4_e2e_results", "task4_e2e_metrics.json")
     if os.path.exists(out_json_path) and not force:
@@ -173,21 +173,21 @@ def execute_task4_e2e_pipeline(
     os.makedirs(os.path.join(output_dir, "graphs"), exist_ok=True)
     
     pipeline = FullIntegratedDisasterPipeline(use_gpu=use_gpu)
-    pipeline.fit(gemini_df)
+    pipeline.fit(train_df)
     
-    texts_luna = luna_df["generated_text"].tolist()
-    y_true_help = luna_df["gt_is_help_request_num"].values
+    texts_test = test_df["generated_text"].tolist()
+    y_true_help = test_df["gt_is_help_request_num"].values
     
-    # Run E2E Flow on Luna test set
-    e2e_outputs = [pipeline.process_tweet(t) for t in texts_luna]
+    # Run E2E Flow on held-out test set
+    e2e_outputs = [pipeline.process_tweet(t) for t in texts_test]
     y_pred_help = np.array([1 if out["is_help_request"] else 0 for out in e2e_outputs])
     
     # 1. Classification Metrics
     task1_metrics = compute_classification_metrics(y_true_help, y_pred_help)
     
     # 2. Clinical Triage Metrics
-    _, luna_adult = extract_triage_data_by_age(luna_df)
-    true_triages = luna_adult["triage_color"].tolist() if len(luna_adult) > 0 else ["GREEN"] * len(texts_luna)
+    _, test_adult = extract_triage_data_by_age(test_df)
+    true_triages = test_adult["triage_color"].tolist() if len(test_adult) > 0 else ["GREEN"] * len(texts_test)
     pred_triages = [out["victims"][0]["triage_color"] if out["victims"] else "GREEN" for out in e2e_outputs[:len(true_triages)]]
     
     clinical_metrics = compute_triage_clinical_metrics(true_triages, pred_triages)

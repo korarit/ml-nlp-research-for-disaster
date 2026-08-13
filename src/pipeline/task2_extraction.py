@@ -24,26 +24,26 @@ from src.utils.metrics import (
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
 
 
-def run_task2_approach_a_rules(luna_df: pd.DataFrame) -> Dict[str, Any]:
-    """Evaluates Approach A Rule-Based Extraction Engine on Luna Dataset."""
+def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
+    """Evaluates Approach A Rule-Based Extraction Engine on Test Dataset."""
     engine = ExtractionRulesEngine()
-    texts = luna_df["generated_text"].tolist()
+    texts = test_df["generated_text"].tolist()
     
     # Phone match
-    true_phones = [str(p or "") for p in luna_df.get("gt_victim_phone", [])]
+    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
     pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
     phone_m = compute_string_match_metrics(true_phones, pred_phones)
     
     # Map URL match
-    true_urls = [str(u or "") for u in luna_df.get("gt_google_map_url", [])]
+    true_urls = [str(u or "") for u in test_df.get("gt_google_map_url", [])]
     pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
     # Count metrics
     count_maes = []
     for field in COUNT_COLUMNS:
-        if field in luna_df.columns:
-            y_t = luna_df[field].values
+        if field in test_df.columns:
+            y_t = test_df[field].values
             y_p = np.array([engine.extract_count(t, field) for t in texts])
             m = compute_count_regression_metrics(y_t, y_p)
             count_maes.append(m["mae"])
@@ -57,20 +57,20 @@ def run_task2_approach_a_rules(luna_df: pd.DataFrame) -> Dict[str, Any]:
 
 
 def run_task2_approach_b1_binned(
-    gemini_df: pd.DataFrame,
-    luna_df: pd.DataFrame,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     model_name: str = "XGBClassifier",
     use_gpu: bool = True
 ) -> Dict[str, Any]:
     """Evaluates Approach B1 Binned Categorical Classification (0, 1, 2, 3+) across count fields."""
-    X_train = gemini_df["generated_text"].values
-    X_test = luna_df["generated_text"].values
+    X_train = train_df["generated_text"].values
+    X_test = test_df["generated_text"].values
     
     f1_scores = []
     for field in COUNT_COLUMNS:
-        if field in gemini_df.columns and field in luna_df.columns:
-            y_tr_binned = bin_count_target(gemini_df[field].values)
-            y_te_binned = bin_count_target(luna_df[field].values)
+        if field in train_df.columns and field in test_df.columns:
+            y_tr_binned = bin_count_target(train_df[field].values)
+            y_te_binned = bin_count_target(test_df[field].values)
             
             pipe = Pipeline([
                 ("tfidf", create_tfidf_vectorizer(use_hybrid=True)),
@@ -88,23 +88,23 @@ def run_task2_approach_b1_binned(
 
 
 def run_task2_approach_b2_regression(
-    gemini_df: pd.DataFrame,
-    luna_df: pd.DataFrame,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     model_name: str = "XGBRegressor",
     use_gpu: bool = True
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
     """Evaluates Approach B2 Continuous Numerical Regressors across count fields."""
-    X_train = gemini_df["generated_text"].values
-    X_test = luna_df["generated_text"].values
+    X_train = train_df["generated_text"].values
+    X_test = test_df["generated_text"].values
     
     maes = []
     all_y_true = []
     all_y_pred = []
     
     for field in COUNT_COLUMNS:
-        if field in gemini_df.columns and field in luna_df.columns:
-            y_tr = gemini_df[field].values.astype(float)
-            y_te = luna_df[field].values.astype(float)
+        if field in train_df.columns and field in test_df.columns:
+            y_tr = train_df[field].values.astype(float)
+            y_te = test_df[field].values.astype(float)
             
             pipe = Pipeline([
                 ("tfidf", create_tfidf_vectorizer(use_hybrid=True)),
@@ -124,12 +124,12 @@ def run_task2_approach_b2_regression(
     }, np.array(all_y_true), np.array(all_y_pred)
 
 
-def run_task2_approach_b3_crf(luna_df: pd.DataFrame) -> Dict[str, Any]:
+def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
     """Evaluates Approach B3 Token Classification (CRF Sequence Tagger) on Location/Name entities."""
-    texts = luna_df["generated_text"].tolist()
+    texts = test_df["generated_text"].tolist()
     engine = ExtractionRulesEngine()
     
-    true_locs = [str(l or "") for l in luna_df.get("gt_location_name", [])]
+    true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
     # Simple regex fallback if CRF model is evaluated token-level
     pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
@@ -142,8 +142,8 @@ def run_task2_approach_b3_crf(luna_df: pd.DataFrame) -> Dict[str, Any]:
 
 
 def run_task2_approach_c_hybrid(
-    gemini_df: pd.DataFrame,
-    luna_df: pd.DataFrame,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     best_regressor_name: str = "XGBRegressor",
     use_gpu: bool = True
 ) -> Dict[str, Any]:
@@ -151,15 +151,15 @@ def run_task2_approach_c_hybrid(
     Evaluates Approach C: Hybrid System (Best ML Regressor for counts + Rules Engine for Regex targets).
     """
     engine = ExtractionRulesEngine()
-    texts = luna_df["generated_text"].tolist()
+    texts = test_df["generated_text"].tolist()
     
     # Phone match
-    true_phones = [str(p or "") for p in luna_df.get("gt_victim_phone", [])]
+    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
     pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
     phone_m = compute_string_match_metrics(true_phones, pred_phones)
     
     # ML Regressor for counts
-    res_reg, _, _ = run_task2_approach_b2_regression(gemini_df, luna_df, best_regressor_name, use_gpu=use_gpu)
+    res_reg, _, _ = run_task2_approach_b2_regression(train_df, test_df, best_regressor_name, use_gpu=use_gpu)
     
     return {
         "approach": f"Approach C (Hybrid Rules + {best_regressor_name}) ⭐",
@@ -176,7 +176,7 @@ def execute_task2_pipeline(
     notifier: Optional[Any] = None
 ) -> pd.DataFrame:
     """Executes full Task 2 Extraction Pipeline with incremental auto-checkpointing and auto-skip support."""
-    gemini_df, luna_df = load_all_datasets()
+    train_df, test_df = load_all_datasets()
     os.makedirs(os.path.join(output_dir, "stat_tests"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     
@@ -203,7 +203,7 @@ def execute_task2_pipeline(
     # 1. Approach A (Rules)
     app_a_name = "Approach A (Rules)"
     if not should_skip(app_a_name):
-        res_a = run_task2_approach_a_rules(luna_df)
+        res_a = run_task2_approach_a_rules(test_df)
         results.append(res_a)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         if notifier:
@@ -220,7 +220,7 @@ def execute_task2_pipeline(
     # 2. Approach B1 (Binned Classifiers)
     app_b1_name = "Approach B1 (Binned XGBClassifier)"
     if not should_skip(app_b1_name):
-        res_b1 = run_task2_approach_b1_binned(gemini_df, luna_df, "XGBClassifier", use_gpu=use_gpu)
+        res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu)
         results.append(res_b1)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         if notifier:
@@ -238,7 +238,7 @@ def execute_task2_pipeline(
     for r_name in reg_models:
         app_b2_name = f"Approach B2 (Regressor: {r_name})"
         if not should_skip(app_b2_name):
-            res_b2, y_t, y_p = run_task2_approach_b2_regression(gemini_df, luna_df, r_name, use_gpu=use_gpu)
+            res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu)
             results.append(res_b2)
             reg_predictions[r_name] = y_p
             y_true_all = y_t
@@ -256,7 +256,7 @@ def execute_task2_pipeline(
     # 4. Approach B3 (CRF Sequence Tagger)
     app_b3_name = "Approach B3 (CRF Sequence Tagger)"
     if not should_skip(app_b3_name):
-        res_b3 = run_task2_approach_b3_crf(luna_df)
+        res_b3 = run_task2_approach_b3_crf(test_df)
         results.append(res_b3)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         if notifier:
@@ -272,7 +272,7 @@ def execute_task2_pipeline(
     # 5. Approach C (Hybrid System)
     app_c_name = "Approach C (Hybrid Rules + ML)"
     if not should_skip(app_c_name):
-        res_c = run_task2_approach_c_hybrid(gemini_df, luna_df, "XGBRegressor", use_gpu=use_gpu)
+        res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu)
         results.append(res_c)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         if notifier:

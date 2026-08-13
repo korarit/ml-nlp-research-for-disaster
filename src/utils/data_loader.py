@@ -10,9 +10,13 @@ import pandas as pd
 from typing import Tuple, Dict, List, Any
 
 # Train dataset
-DEFAULT_GEMINI_PATH = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset_v2.csv"
+DEFAULT_TRAIN_PATH = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset_v2.csv"
 # Test dataset
-DEFAULT_LUNA_PATH = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
+DEFAULT_TEST_PATH = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
+
+# Legacy aliases for backwards compatibility
+DEFAULT_GEMINI_PATH = DEFAULT_TRAIN_PATH
+DEFAULT_LUNA_PATH = DEFAULT_TEST_PATH
 
 COUNT_COLUMNS = [
     "gt_dead", "gt_critical", "gt_urgent", "gt_safe",
@@ -41,14 +45,28 @@ def load_dataset(filepath: str) -> pd.DataFrame:
     return df
 
 
-def load_all_datasets(
-    gemini_path: str = DEFAULT_GEMINI_PATH,
-    luna_path: str = DEFAULT_LUNA_PATH
+def load_train_test_datasets(
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH,
+    **kwargs
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Loads both Gemini CV dataset and Luna held-out test dataset."""
-    gemini_df = load_dataset(gemini_path)
-    luna_df = load_dataset(luna_path)
-    return gemini_df, luna_df
+    """Loads both Training dataset and Held-out Test dataset."""
+    if "gemini_path" in kwargs:
+        train_path = kwargs["gemini_path"]
+    if "luna_path" in kwargs:
+        test_path = kwargs["luna_path"]
+    train_df = load_dataset(train_path)
+    test_df = load_dataset(test_path)
+    return train_df, test_df
+
+
+def load_all_datasets(
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH,
+    **kwargs
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Loads training and test datasets. (Alias for load_train_test_datasets)."""
+    return load_train_test_datasets(train_path=train_path, test_path=test_path, **kwargs)
 
 
 def bin_count_target(y_counts: np.ndarray) -> np.ndarray:

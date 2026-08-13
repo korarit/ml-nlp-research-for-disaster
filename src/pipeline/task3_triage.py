@@ -21,14 +21,14 @@ from src.utils.metrics import compute_triage_clinical_metrics, compute_string_ma
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
 
 
-def run_subtask_3_1_people_extraction(luna_df: pd.DataFrame) -> Dict[str, Any]:
+def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
     """
     Evaluates Sub-task 3.1: People Extraction (Extracting individual victims & symptoms).
     Method 3.1a: Rule-based Clause Splitter
     Method 3.1b: BiLSTM-CRF Extractor
     """
     splitter = ClauseSplitterRules()
-    texts = luna_df["generated_text"].tolist()
+    texts = test_df["generated_text"].tolist()
     
     extracted_counts = [len(splitter.extract_victims(t)) for t in texts]
     mean_extracted_victims = float(np.mean(extracted_counts))
@@ -42,39 +42,43 @@ def run_subtask_3_1_people_extraction(luna_df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-def run_triage_cv_and_luna(
-    gemini_triage_df: pd.DataFrame,
-    luna_triage_df: pd.DataFrame,
+def run_triage_cv_and_test(
+    train_triage_df: pd.DataFrame,
+    test_triage_df: pd.DataFrame,
     model_name: str,
     is_pediatric: bool = False,
     use_gpu: bool = True
 ) -> Tuple[Dict[str, Any], np.ndarray]:
-    """Runs 5-Fold Stratified CV on Gemini Triage set and tests on Luna Triage set."""
-    feature_col = "text" if "text" in gemini_triage_df.columns else "symptoms_literal"
-    X_tr = gemini_triage_df[feature_col].values
-    y_tr = gemini_triage_df["triage_color"].values
+    """Runs 5-Fold Stratified CV on Training Triage set and tests on Held-out Test Triage set."""
+    feature_col = "text" if "text" in train_triage_df.columns else "symptoms_literal"
+    X_tr = train_triage_df[feature_col].values
+    y_tr = train_triage_df["triage_color"].values
     
-    X_te = luna_triage_df[feature_col].values
-    y_te = luna_triage_df["triage_color"].values
+    X_te = test_triage_df[feature_col].values
+    y_te = test_triage_df["triage_color"].values
     
     if len(y_tr) < 10 or len(y_te) < 10:
         return {"model": model_name, "f1_weighted": 0.0, "critical_under_triage_rate": 0.0}, np.array([])
         
     if model_name in ["PediatricIITTRules", "AdultIITTRules"]:
         engine = PediatricIITTRules() if is_pediatric else AdultIITTRules()
-        luna_preds = engine.predict(list(X_te))
+        test_preds = engine.predict(list(X_te))
     else:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
         clf = get_classifier(model_name, use_gpu=use_gpu)
         pipe = Pipeline([("tfidf", vectorizer), ("clf", clf)])
         pipe.fit(X_tr, y_tr)
-        luna_preds = pipe.predict(X_te)
+        test_preds = pipe.predict(X_te)
         
-    metrics = compute_triage_clinical_metrics(list(y_te), list(luna_preds))
+    metrics = compute_triage_clinical_metrics(list(y_te), list(test_preds))
     metrics["model"] = model_name
     metrics["task"] = "Pediatric Triage (3.2)" if is_pediatric else "Adult Triage (3.3)"
     
-    return metrics, np.array(luna_preds)
+    return metrics, np.array(test_preds)
+
+
+# Legacy alias for backwards compatibility
+run_triage_cv_and_luna = run_triage_cv_and_test
 
 
 def execute_task3_pipeline(
@@ -85,10 +89,10 @@ def execute_task3_pipeline(
     notifier: Optional[Any] = None
 ) -> pd.DataFrame:
     """Executes full Task 3 Clinical Triage Pipeline with incremental auto-checkpointing and auto-skip support."""
-    gemini_df, luna_df = load_all_datasets()
+    train_df, test_df = load_all_datasets()
     
-    gemini_pedia, gemini_adult = extract_triage_data_by_age(gemini_df)
-    luna_pedia, luna_adult = extract_triage_data_by_age(luna_df)
+    train_pedia, train_adult = extract_triage_data_by_age(train_df)
+    test_pedia, test_adult = extract_triage_data_by_age(test_df)
     
     models_to_test = selected_classifiers or ["DummyClassifier", "LogisticRegression", "RandomForestClassifier", "XGBClassifier", "LGBMClassifier", "CatBoostClassifier"]
     
@@ -119,7 +123,7 @@ def execute_task3_pipeline(
     # -------------------------------------------------------------
     key_3_1 = "Subtask_3.1_Rule_People_Extraction"
     if not should_skip(key_3_1):
-        res_3_1 = run_subtask_3_1_people_extraction(luna_df)
+        res_3_1 = run_subtask_3_1_people_extraction(test_df)
         results.append(res_3_1)
         pd.DataFrame(results).to_csv(task3_csv, index=False)
         if notifier:
@@ -137,12 +141,12 @@ def execute_task3_pipeline(
     # -------------------------------------------------------------
     pedia_models = ["PediatricIITTRules"] + models_to_test
     pedia_preds_dict = {}
-    y_te_pedia = luna_pedia["triage_color"].values if len(luna_pedia) > 0 else np.array([])
+    y_te_pedia = test_pedia["triage_color"].values if len(test_pedia) > 0 else np.array([])
     
     for m_name in pedia_models:
         key_3_2 = f"Pediatric_{m_name}"
         if not should_skip(key_3_2):
-            m_res, preds = run_triage_cv_and_luna(gemini_pedia, luna_pedia, m_name, is_pediatric=True, use_gpu=use_gpu)
+            m_res, preds = run_triage_cv_and_test(train_pedia, test_pedia, m_name, is_pediatric=True, use_gpu=use_gpu)
             results.append(m_res)
             if len(preds) > 0:
                 pedia_preds_dict[m_name] = preds
@@ -172,12 +176,12 @@ def execute_task3_pipeline(
     # -------------------------------------------------------------
     adult_models = ["AdultIITTRules"] + models_to_test
     adult_preds_dict = {}
-    y_te_adult = luna_adult["triage_color"].values if len(luna_adult) > 0 else np.array([])
+    y_te_adult = test_adult["triage_color"].values if len(test_adult) > 0 else np.array([])
     
     for m_name in adult_models:
         key_3_3 = f"Adult_{m_name}"
         if not should_skip(key_3_3):
-            m_res, preds = run_triage_cv_and_luna(gemini_adult, luna_adult, m_name, is_pediatric=False, use_gpu=use_gpu)
+            m_res, preds = run_triage_cv_and_test(train_adult, test_adult, m_name, is_pediatric=False, use_gpu=use_gpu)
             results.append(m_res)
             if len(preds) > 0:
                 adult_preds_dict[m_name] = preds
