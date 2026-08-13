@@ -263,7 +263,10 @@ def execute_task2_pipeline(
             notifier.notify_step_complete(
                 task_name="Task 2: Extraction",
                 step_name=res_b3["approach"],
-                metrics={"Overall Entity F1": res_b3.get("overall_entity_f1", 0.0)}
+                metrics={
+                    "Location Exact Match": res_b3.get("location_exact_match", 0.0),
+                    "Jaccard Similarity": res_b3.get("jaccard_similarity", 0.0)
+                }
             )
     
     # 5. Approach C (Hybrid System)

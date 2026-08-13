@@ -19,8 +19,12 @@ def run_mcnemar_test(
       b: Model A correct & B wrong
       c: Model B correct & A wrong
     """
-    correct_a = (y_pred_a == y_true)
-    correct_b = (y_pred_b == y_true)
+    y_t = np.array(y_true, dtype=str)
+    y_a = np.array(y_pred_a, dtype=str)
+    y_b = np.array(y_pred_b, dtype=str)
+    
+    correct_a = (y_a == y_t)
+    correct_b = (y_b == y_t)
     
     b = int(np.sum(correct_a & ~correct_b))
     c = int(np.sum(~correct_a & correct_b))

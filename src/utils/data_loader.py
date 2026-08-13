@@ -50,19 +50,20 @@ def load_all_datasets(
 
 
 def bin_count_target(y_counts: np.ndarray) -> np.ndarray:
-    """Bins continuous counts into categorical classes: '0', '1', '2', '3+'."""
+    """Bins continuous counts into categorical classes: 0, 1, 2, 3+ (encoded as 0, 1, 2, 3)."""
     binned = []
     for val in y_counts:
         v = int(val)
         if v == 0:
-            binned.append("0")
+            binned.append(0)
         elif v == 1:
-            binned.append("1")
+            binned.append(1)
         elif v == 2:
-            binned.append("2")
+            binned.append(2)
         else:
-            binned.append("3+")
-    return np.array(binned)
+            binned.append(3)
+    return np.array(binned, dtype=int)
+
 
 
 def parse_victims_json(raw_json: Any) -> List[Dict[str, Any]]:
@@ -99,7 +100,14 @@ def extract_triage_data_by_age(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataF
             if not color or color not in ["RED", "YELLOW", "GREEN"]:
                 color = "GREEN"
                 
-            age = vic.get("age", None)
+            raw_age = vic.get("age", None)
+            age = None
+            if raw_age is not None and str(raw_age).strip() != "":
+                try:
+                    age = float(raw_age)
+                except (ValueError, TypeError):
+                    age = None
+
             symptoms = vic.get("symptoms_literal", "") or text
             
             record = {

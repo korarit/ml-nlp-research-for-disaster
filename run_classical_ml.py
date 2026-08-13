@@ -36,8 +36,8 @@ def str2bool(v):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Disaster NLP Classical ML & BiLSTM-CRF Benchmark CLI")
     
-    parser.add_argument("--task", type=str, default="all", choices=["1", "2", "3.1", "3.2", "3.3", "4", "all"],
-                        help="Select Task to execute (1, 2, 3.1, 3.2, 3.3, 4, or all)")
+    parser.add_argument("--task", type=str, default="all", choices=["1", "2", "3", "3.1", "3.2", "3.3", "4", "all"],
+                        help="Select Task to execute (1, 2, 3, 3.1, 3.2, 3.3, 4, or all)")
     parser.add_argument("--model", type=str, default="all",
                         help="Model name (e.g. XGBClassifier, LinearSVC, BiLSTM_CRF, or all)")
     parser.add_argument("--use_gpu", type=str2bool, default=True,

@@ -4,6 +4,7 @@ Supports GPU acceleration for XGBoost, LightGBM, CatBoost, cuML, and scikit-lear
 """
 
 from typing import Dict, Any, Optional
+import numpy as np
 import torch
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import (
@@ -18,11 +19,60 @@ from sklearn.ensemble import (
     RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier, GradientBoostingClassifier
 )
 
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import LabelEncoder
+
 try:
     from xgboost import XGBClassifier
     HAS_XGB = True
 except ImportError:
     HAS_XGB = False
+
+
+class XGBClassifierWrapper(BaseEstimator, ClassifierMixin):
+    """
+    Wrapper around XGBClassifier that transparently handles string or non-integer target encoding
+    to prevent XGBoost 1.6+ ValueError on string target classes.
+    """
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.clf = XGBClassifier(**kwargs)
+        self.le = None
+
+    def get_params(self, deep=True):
+        return self.clf.get_params(deep=deep)
+
+    def set_params(self, **params):
+        self.clf.set_params(**params)
+        return self
+
+    def fit(self, X, y, **fit_params):
+        if y is not None:
+            y_arr = np.asarray(y)
+            if y_arr.dtype.kind in {'U', 'S', 'O'} or (len(y_arr) > 0 and isinstance(y_arr.flat[0], str)):
+                self.le = LabelEncoder()
+                y_encoded = self.le.fit_transform(y_arr)
+                self.classes_ = self.le.classes_
+                self.clf.fit(X, y_encoded, **fit_params)
+                return self
+            else:
+                self.classes_ = np.unique(y_arr)
+        self.clf.fit(X, y, **fit_params)
+        return self
+
+    def predict(self, X, **predict_params):
+        preds = self.clf.predict(X, **predict_params)
+        if self.le is not None:
+            return self.le.inverse_transform(preds)
+        return preds
+
+    def predict_proba(self, X, **predict_params):
+        return self.clf.predict_proba(X, **predict_params)
+
+    @property
+    def feature_importances_(self):
+        return getattr(self.clf, "feature_importances_", None)
+
 
 try:
     from lightgbm import LGBMClassifier
@@ -196,7 +246,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
             "device": device_arg, "tree_method": "hist", "random_state": random_state,
             "eval_metric": "logloss", **kwargs
         }
-        return XGBClassifier(**p)
+        return XGBClassifierWrapper(**p)
         
     elif m == "LGBMClassifier":
         if not HAS_LGBM:

@@ -50,10 +50,11 @@ def run_triage_cv_and_luna(
     use_gpu: bool = True
 ) -> Tuple[Dict[str, Any], np.ndarray]:
     """Runs 5-Fold Stratified CV on Gemini Triage set and tests on Luna Triage set."""
-    X_tr = gemini_triage_df["symptoms_literal"].values
+    feature_col = "text" if "text" in gemini_triage_df.columns else "symptoms_literal"
+    X_tr = gemini_triage_df[feature_col].values
     y_tr = gemini_triage_df["triage_color"].values
     
-    X_te = luna_triage_df["symptoms_literal"].values
+    X_te = luna_triage_df[feature_col].values
     y_te = luna_triage_df["triage_color"].values
     
     if len(y_tr) < 10 or len(y_te) < 10:
@@ -126,8 +127,8 @@ def execute_task3_pipeline(
                 task_name="Task 3: Triage",
                 step_name="Sub-task 3.1: People Extraction",
                 metrics={
-                    "Victims Extracted": res_3_1.get("total_victims_extracted", 0),
-                    "Avg Victims/Tweet": res_3_1.get("avg_victims_per_tweet", 0.0)
+                    "Mean Victims/Tweet": res_3_1.get("mean_extracted_victims_per_tweet", 0.0),
+                    "F1 Weighted": res_3_1.get("f1_weighted", 0.0)
                 }
             )
     
@@ -151,9 +152,10 @@ def execute_task3_pipeline(
                     task_name="Task 3.2: Pediatric Triage",
                     step_name=f"Pediatric ({m_name})",
                     metrics={
-                        "CV F1": m_res.get("cv_f1_mean", 0.0),
-                        "Luna Test F1": m_res.get("luna_f1", 0.0),
-                        "Under-triage Rate": m_res.get("luna_under_triage_rate", 0.0)
+                        "F1 Weighted": m_res.get("f1_weighted", 0.0),
+                        "Triage Accuracy": m_res.get("triage_accuracy", 0.0),
+                        "Under-triage Rate": m_res.get("under_triage_rate", 0.0),
+                        "Critical Under-triage Rate": m_res.get("critical_under_triage_rate", 0.0)
                     }
                 )
             
@@ -185,9 +187,10 @@ def execute_task3_pipeline(
                     task_name="Task 3.3: Adult Triage",
                     step_name=f"Adult ({m_name})",
                     metrics={
-                        "CV F1": m_res.get("cv_f1_mean", 0.0),
-                        "Luna Test F1": m_res.get("luna_f1", 0.0),
-                        "Under-triage Rate": m_res.get("luna_under_triage_rate", 0.0)
+                        "F1 Weighted": m_res.get("f1_weighted", 0.0),
+                        "Triage Accuracy": m_res.get("triage_accuracy", 0.0),
+                        "Under-triage Rate": m_res.get("under_triage_rate", 0.0),
+                        "Critical Under-triage Rate": m_res.get("critical_under_triage_rate", 0.0)
                     }
                 )
             
