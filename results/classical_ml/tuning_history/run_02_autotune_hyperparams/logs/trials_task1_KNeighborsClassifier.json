@@ -5,8 +5,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":9,
-      "weights":"distance"
+      "n_neighbors":6,
+      "weights":"uniform"
     }
   },
   {
@@ -25,7 +25,7 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":15,
+      "n_neighbors":3,
       "weights":"distance"
     }
   },
@@ -35,8 +35,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":7,
-      "weights":"uniform"
+      "n_neighbors":8,
+      "weights":"distance"
     }
   },
   {
@@ -45,8 +45,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":14,
-      "weights":"uniform"
+      "n_neighbors":6,
+      "weights":"distance"
     }
   },
   {
@@ -55,7 +55,7 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":4,
+      "n_neighbors":3,
       "weights":"distance"
     }
   },
@@ -65,7 +65,7 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":13,
+      "n_neighbors":9,
       "weights":"uniform"
     }
   },
@@ -75,7 +75,7 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":15,
+      "n_neighbors":11,
       "weights":"uniform"
     }
   },
@@ -85,8 +85,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "n_neighbors":15,
-      "weights":"uniform"
+      "n_neighbors":10,
+      "weights":"distance"
     }
   },
   {
@@ -96,7 +96,7 @@
     "f2":1.0,
     "params":{
       "n_neighbors":3,
-      "weights":"uniform"
+      "weights":"distance"
     }
   }
 ]

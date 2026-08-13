@@ -1,4 +1,4 @@
 {
-  "n_neighbors": 9,
-  "weights": "distance"
+  "n_neighbors": 6,
+  "weights": "uniform"
 }

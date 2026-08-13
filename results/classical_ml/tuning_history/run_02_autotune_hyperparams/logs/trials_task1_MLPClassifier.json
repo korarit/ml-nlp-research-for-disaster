@@ -1,12 +1,12 @@
 [
   {
     "trial":0,
-    "score":1.0,
-    "f1":1.0,
-    "f2":1.0,
+    "score":0.9934034998,
+    "f1":0.9906174266,
+    "f2":0.9961895731,
     "params":{
-      "alpha":0.0001443601,
-      "learning_rate_init":0.0045762878
+      "alpha":0.0000157992,
+      "learning_rate_init":0.0001009367
     }
   },
   {
@@ -15,8 +15,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0000340804,
-      "learning_rate_init":0.0045264077
+      "alpha":0.0000174365,
+      "learning_rate_init":0.0021982774
     }
   },
   {
@@ -25,8 +25,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0005563196,
-      "learning_rate_init":0.0001396206
+      "alpha":0.0003192565,
+      "learning_rate_init":0.0008049567
     }
   },
   {
@@ -35,8 +35,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0006455113,
-      "learning_rate_init":0.0083197734
+      "alpha":0.0014775256,
+      "learning_rate_init":0.002330919
     }
   },
   {
@@ -45,8 +45,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.00163564,
-      "learning_rate_init":0.0002340681
+      "alpha":0.0069564569,
+      "learning_rate_init":0.0035195314
     }
   },
   {
@@ -55,8 +55,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0035968549,
-      "learning_rate_init":0.00660263
+      "alpha":0.0009553578,
+      "learning_rate_init":0.0054725519
     }
   },
   {
@@ -65,28 +65,28 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0000211556,
-      "learning_rate_init":0.0029657304
+      "alpha":0.0000787089,
+      "learning_rate_init":0.0006687736
     }
   },
   {
     "trial":7,
-    "score":1.0,
-    "f1":1.0,
-    "f2":1.0,
+    "score":0.99664992,
+    "f1":0.9952244247,
+    "f2":0.9980754153,
     "params":{
-      "alpha":0.0001936206,
-      "learning_rate_init":0.0002682945
+      "alpha":0.0000763901,
+      "learning_rate_init":0.0003864661
     }
   },
   {
     "trial":8,
-    "score":1.0,
-    "f1":1.0,
-    "f2":1.0,
+    "score":0.9920273504,
+    "f1":0.9886524189,
+    "f2":0.995402282,
     "params":{
-      "alpha":0.0000115278,
-      "learning_rate_init":0.0045659171
+      "alpha":0.0016209592,
+      "learning_rate_init":0.0003441146
     }
   },
   {
@@ -95,8 +95,8 @@
     "f1":1.0,
     "f2":1.0,
     "params":{
-      "alpha":0.0074484508,
-      "learning_rate_init":0.0036401418
+      "alpha":0.00112905,
+      "learning_rate_init":0.0017418964
     }
   }
 ]
