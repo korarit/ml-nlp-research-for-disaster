@@ -1,0 +1,191 @@
+[
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "DummyClassifier",
+    "test_type": "McNemar",
+    "statistic": 2.367391304347826,
+    "p_value": 0.12389393370932882,
+    "p_adjusted": 0.8672575359653018,
+    "significant": false
+  },
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "LogisticRegression",
+    "test_type": "McNemar",
+    "statistic": 404.0024630541872,
+    "p_value": 7.4072918718847796e-90,
+    "p_adjusted": 8.148021059073258e-89,
+    "significant": true
+  },
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "RandomForestClassifier",
+    "test_type": "McNemar",
+    "statistic": 404.0024630541872,
+    "p_value": 7.4072918718847796e-90,
+    "p_adjusted": 8.148021059073258e-89,
+    "significant": true
+  },
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "XGBClassifier",
+    "test_type": "McNemar",
+    "statistic": 404.0024630541872,
+    "p_value": 7.4072918718847796e-90,
+    "p_adjusted": 8.148021059073258e-89,
+    "significant": true
+  },
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "LGBMClassifier",
+    "test_type": "McNemar",
+    "statistic": 404.0024630541872,
+    "p_value": 7.4072918718847796e-90,
+    "p_adjusted": 8.148021059073258e-89,
+    "significant": true
+  },
+  {
+    "model_a": "AdultIITTRules",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 5127.63472095151,
+    "p_value": 0.0,
+    "p_adjusted": 0.0,
+    "significant": true
+  },
+  {
+    "model_a": "DummyClassifier",
+    "model_b": "LogisticRegression",
+    "test_type": "McNemar",
+    "statistic": 438.0022727272727,
+    "p_value": 2.94598742109445e-97,
+    "p_adjusted": 4.418981131641675e-96,
+    "significant": true
+  },
+  {
+    "model_a": "DummyClassifier",
+    "model_b": "RandomForestClassifier",
+    "test_type": "McNemar",
+    "statistic": 438.0022727272727,
+    "p_value": 2.94598742109445e-97,
+    "p_adjusted": 4.418981131641675e-96,
+    "significant": true
+  },
+  {
+    "model_a": "DummyClassifier",
+    "model_b": "XGBClassifier",
+    "test_type": "McNemar",
+    "statistic": 438.0022727272727,
+    "p_value": 2.94598742109445e-97,
+    "p_adjusted": 4.418981131641675e-96,
+    "significant": true
+  },
+  {
+    "model_a": "DummyClassifier",
+    "model_b": "LGBMClassifier",
+    "test_type": "McNemar",
+    "statistic": 438.0022727272727,
+    "p_value": 2.94598742109445e-97,
+    "p_adjusted": 4.418981131641675e-96,
+    "significant": true
+  },
+  {
+    "model_a": "DummyClassifier",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 545.8912481264878,
+    "p_value": 9.85863179562017e-121,
+    "p_adjusted": 1.5773810872992272e-119,
+    "significant": true
+  },
+  {
+    "model_a": "LogisticRegression",
+    "model_b": "RandomForestClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "LogisticRegression",
+    "model_b": "XGBClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "LogisticRegression",
+    "model_b": "LGBMClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "LogisticRegression",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 311516.0000032101,
+    "p_value": 0.0,
+    "p_adjusted": 0.0,
+    "significant": true
+  },
+  {
+    "model_a": "RandomForestClassifier",
+    "model_b": "XGBClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "RandomForestClassifier",
+    "model_b": "LGBMClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "RandomForestClassifier",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 311516.0000032101,
+    "p_value": 0.0,
+    "p_adjusted": 0.0,
+    "significant": true
+  },
+  {
+    "model_a": "XGBClassifier",
+    "model_b": "LGBMClassifier",
+    "test_type": "McNemar",
+    "statistic": 0.0,
+    "p_value": 1.0,
+    "p_adjusted": 1.0,
+    "significant": false
+  },
+  {
+    "model_a": "XGBClassifier",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 311516.0000032101,
+    "p_value": 0.0,
+    "p_adjusted": 0.0,
+    "significant": true
+  },
+  {
+    "model_a": "LGBMClassifier",
+    "model_b": "CatBoostClassifier",
+    "test_type": "McNemar",
+    "statistic": 311516.0000032101,
+    "p_value": 0.0,
+    "p_adjusted": 0.0,
+    "significant": true
+  }
+]
