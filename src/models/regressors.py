@@ -43,6 +43,47 @@ except ImportError:
     HAS_CUML = False
 
 
+import numpy as np
+import scipy.sparse
+
+
+class CumlSparseToDenseAdapter:
+    """
+    Adapter for cuML estimators that only accept dense float32 inputs (e.g. RandomForest, KNeighbors).
+    Converts sparse CSR matrix to dense np.float32 on the fly and ensures outputs are NumPy arrays.
+    """
+    def __init__(self, estimator):
+        self.estimator = estimator
+
+    def fit(self, X, y=None, **kwargs):
+        if scipy.sparse.issparse(X):
+            X = X.toarray().astype(np.float32)
+        elif isinstance(X, np.ndarray) and X.dtype != np.float32:
+            X = X.astype(np.float32)
+        if y is not None:
+            if hasattr(y, "values"):
+                y = y.values
+            if isinstance(y, np.ndarray) and y.dtype == np.float64:
+                y = y.astype(np.float32)
+        self.estimator.fit(X, y, **kwargs)
+        return self
+
+    def predict(self, X, **kwargs):
+        if scipy.sparse.issparse(X):
+            X = X.toarray().astype(np.float32)
+        elif isinstance(X, np.ndarray) and X.dtype != np.float32:
+            X = X.astype(np.float32)
+        preds = self.estimator.predict(X, **kwargs)
+        if hasattr(preds, "to_numpy"):
+            preds = preds.to_numpy()
+        elif hasattr(preds, "get"):
+            preds = preds.get()
+        return np.asarray(preds)
+
+    def __getattr__(self, name):
+        return getattr(self.estimator, name)
+
+
 def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42, **kwargs) -> Any:
     """
     Instantiates a regression model by name with optional GPU acceleration (cuML/PyTorch/Native GPU).
@@ -133,7 +174,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {k: v for k, v in kwargs.items() if k != "n_jobs"}
-                return cuml.neighbors.KNeighborsRegressor(**cp)
+                return CumlSparseToDenseAdapter(cuml.neighbors.KNeighborsRegressor(**cp))
             except Exception:
                 pass
         p = {"n_jobs": -1, **kwargs}
@@ -151,7 +192,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"n_estimators": 100, "random_state": random_state, **{k: v for k, v in kwargs.items() if k != "n_jobs"}}
-                return cuml.ensemble.RandomForestRegressor(**cp)
+                return CumlSparseToDenseAdapter(cuml.ensemble.RandomForestRegressor(**cp))
             except Exception:
                 pass
         p = {"n_estimators": 100, "random_state": random_state, "n_jobs": -1, **kwargs}
