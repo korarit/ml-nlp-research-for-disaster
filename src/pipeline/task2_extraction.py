@@ -116,7 +116,9 @@ def run_task2_approach_b1_binned(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     model_name: str = "XGBClassifier",
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    X_train_vec: Optional[Any] = None,
+    X_test_vec: Optional[Any] = None
 ) -> Dict[str, Any]:
     """Evaluates Approach B1 Binned Categorical Classification (0, 1, 2, 3+) across count fields."""
     engine = ExtractionRulesEngine()
@@ -140,8 +142,10 @@ def run_task2_approach_b1_binned(
     pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
     coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
 
-    X_train = train_df["generated_text"].values
-    X_test = test_df["generated_text"].values
+    if X_train_vec is None or X_test_vec is None:
+        vectorizer = create_tfidf_vectorizer(use_hybrid=True)
+        X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
+        X_test_vec = vectorizer.transform(test_df["generated_text"].values)
     
     maes = []
     rmses = []
@@ -157,12 +161,9 @@ def run_task2_approach_b1_binned(
             y_tr_binned = bin_count_target(y_tr_raw)
             y_te_binned = bin_count_target(y_te_raw)
             
-            pipe = Pipeline([
-                ("tfidf", create_tfidf_vectorizer(use_hybrid=True)),
-                ("clf", get_classifier(model_name, use_gpu=use_gpu))
-            ])
-            pipe.fit(X_train, y_tr_binned)
-            preds_binned = pipe.predict(X_test)
+            clf = get_classifier(model_name, use_gpu=use_gpu)
+            clf.fit(X_train_vec, y_tr_binned)
+            preds_binned = clf.predict(X_test_vec)
             
             m = compute_count_regression_metrics(y_te_binned, preds_binned)
             clf_m = compute_classification_metrics(y_te_binned, preds_binned)
@@ -198,7 +199,9 @@ def run_task2_approach_b2_regression(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     model_name: str = "XGBRegressor",
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    X_train_vec: Optional[Any] = None,
+    X_test_vec: Optional[Any] = None
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
     """Evaluates Approach B2 Continuous Numerical Regressors across count fields."""
     engine = ExtractionRulesEngine()
@@ -222,8 +225,10 @@ def run_task2_approach_b2_regression(
     pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
     coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
 
-    X_train = train_df["generated_text"].values
-    X_test = test_df["generated_text"].values
+    if X_train_vec is None or X_test_vec is None:
+        vectorizer = create_tfidf_vectorizer(use_hybrid=True)
+        X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
+        X_test_vec = vectorizer.transform(test_df["generated_text"].values)
     
     maes = []
     rmses = []
@@ -240,12 +245,9 @@ def run_task2_approach_b2_regression(
             y_tr = train_df[field].values.astype(float)
             y_te = test_df[field].values.astype(float)
             
-            pipe = Pipeline([
-                ("tfidf", create_tfidf_vectorizer(use_hybrid=True)),
-                ("reg", get_regressor(model_name, use_gpu=use_gpu))
-            ])
-            pipe.fit(X_train, y_tr)
-            preds = np.clip(pipe.predict(X_test), 0, None)
+            reg = get_regressor(model_name, use_gpu=use_gpu)
+            reg.fit(X_train_vec, y_tr)
+            preds = np.clip(reg.predict(X_test_vec), 0, None)
             
             m = compute_count_regression_metrics(y_te, preds)
             clf_m = compute_classification_metrics(bin_count_target(y_te), bin_count_target(preds))
@@ -325,13 +327,18 @@ def run_task2_approach_c_hybrid(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     best_regressor_name: str = "XGBRegressor",
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    X_train_vec: Optional[Any] = None,
+    X_test_vec: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Evaluates Approach C: Hybrid System (Best ML Regressor for counts + Rules Engine for Regex targets).
     """
     res_a = run_task2_approach_a_rules(test_df)
-    res_reg, _, _ = run_task2_approach_b2_regression(train_df, test_df, best_regressor_name, use_gpu=use_gpu)
+    res_reg, _, _ = run_task2_approach_b2_regression(
+        train_df, test_df, best_regressor_name, use_gpu=use_gpu,
+        X_train_vec=X_train_vec, X_test_vec=X_test_vec
+    )
     
     return {
         "approach": f"Approach C (Hybrid Rules + {best_regressor_name}) ⭐",
@@ -368,6 +375,13 @@ def execute_task2_pipeline(
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "graphs"), exist_ok=True)
     
+    # Pre-compute TF-IDF Vectorizer once for all ML Approaches
+    print("--- [Task 2] Pre-computing TF-IDF Vectorization (Thai tokenization) once for pipeline ---")
+    vectorizer = create_tfidf_vectorizer(use_hybrid=True)
+    X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
+    X_test_vec = vectorizer.transform(test_df["generated_text"].values)
+    print(f"--- [Task 2] TF-IDF Matrix ready: train={X_train_vec.shape}, test={X_test_vec.shape} ---")
+
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")
     completed_map = {}
@@ -417,7 +431,7 @@ def execute_task2_pipeline(
     # 2. Approach B1 (Binned Classifiers)
     app_b1_name = "Approach B1 (Binned XGBClassifier)"
     if not should_skip(app_b1_name):
-        res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu)
+        res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
         results.append(res_b1)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         notify_step(res_b1)
@@ -430,7 +444,7 @@ def execute_task2_pipeline(
     for r_name in reg_models:
         app_b2_name = f"Approach B2 (Regressor {r_name})"
         if not should_skip(app_b2_name):
-            res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu)
+            res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
             results.append(res_b2)
             reg_predictions[r_name] = y_p
             y_true_all = y_t
@@ -448,7 +462,7 @@ def execute_task2_pipeline(
     # 5. Approach C (Hybrid System)
     app_c_name = "Approach C (Hybrid Rules + XGBRegressor) ⭐"
     if not should_skip(app_c_name):
-        res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu)
+        res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
         results.append(res_c)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         notify_step(res_c)
