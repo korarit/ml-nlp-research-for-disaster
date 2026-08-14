@@ -36,7 +36,32 @@ class ExtractionRulesEngine:
     PHONE_REGEX = re.compile(r"(?:0[689][0-9][\s-]?[0-9]{3,4}[\s-]?[0-9]{4}|0[0-9]{1,2}[\s-]?[0-9]{3}[\s-]?[0-9]{4})")
     COORDS_REGEX = re.compile(r"(\d{1,2}\.\d{3,})\s*,\s*(9[7-9]\.\d{3,}|10[0-5]\.\d{3,})")
     MAP_URL_REGEX = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|www\.google\.com/maps|maps\.google\.com)[^\s,]+")
-    LOCATION_REGEX = re.compile(r"(?:ที่|บริเวณ|ซอย|ถนน|ต\.|อ\.|จ\.|หมู่ที่?|แขวง|เขต|อพาร์ทเม้นท์|บ้าน|หมู่บ้าน|ริม|ใกล้|ตรงข้าม)\s*([ก-๙0-9\.\s\-\/]+?)(?=\s+(?:พิกัด|เบอร์|โทร|ติดต่อ|https?://|\n|\r|$))")
+    try:
+        from pythainlp.corpus import provinces
+        _PROV_LIST = "|".join(sorted(list(provinces()), key=len, reverse=True))
+    except Exception:
+        _PROV_LIST = "กรุงเทพมหานคร|กรุงเทพฯ|เชียงใหม่|เชียงราย|พะเยา|กาญจนบุรี|สมุทรสาคร|นครนายก|ชลบุรี|พิษณุโลก|ภูเก็ต|สงขลา|น่าน|แพร่|ลำปาง|ลำพูน|แม่ฮ่องสอน|ตาก|สุโขทัย|อุตรดิตถ์|กำแพงเพชร|พิจิตร|เพชรบูรณ์|นครสวรรค์|อุทัยธานี|นนทบุรี|ปทุมธานี|พระนครศรีอยุธยา|อ่างทอง|ลพบุรี|สิงห์บุรี|ชัยนาท|สระบุรี|นครปฐม|สุพรรณบุรี|สมุทรปราการ|สมุทรสงคราม|เพชรบุรี|ประจวบคีรีขันธ์|ราชบุรี|ฉะเชิงเทรา|ปราจีนบุรี|สระแก้ว|ระยอง|จันทบุรี|ตราด|นครราชสีมา|บุรีรัมย์|สุรินทร์|ศรีสะเกษ|อุบลราชธานี|ยโสธร|ชัยภูมิ|อำนาจเจริญ|บึงกาฬ|หนองบัวลำภู|ขอนแก่น|อุดรธานี|เลย|หนองคาย|มหาสารคาม|ร้อยเอ็ด|กาฬสินธุ์|สกลนคร|นครพนม|มุกดาหาร|นครศรีธรรมราช|กระบี่|พังงา|สุราษฎร์ธานี|ระนอง|ชุมพร|ตรัง|พัทลุง|สตูล|ปัตตานี|ยะลา|นราธิวาส"
+
+    LOCATION_PATTERNS = [
+        # Full hierarchy: Landmark + Sub-district + District + Province
+        re.compile(
+            r"((?:(?:ตลาดน้ำ|ตลาด|วัด|ซอย|ถนน|หมู่บ้าน|หมู่ที่|ชุมชน|คอนโด|อพาร์ทเม้นท์|โรงเรียน|รพ\.|สะพาน|บ้าน|พื้นที่)\s*[ก-๙0-9\.\-\/\(\)\s]+?)?"
+            r"(?:ตำบล|ต\.|แขวง)\s*[ก-๙0-9]+"
+            r"(?:\s*(?:อำเภอ|อ\.|เขต)\s*[ก-๙0-9]+)?"
+            r"(?:\s*(?:จังหวัด|จ\.)?\s*(?:" + _PROV_LIST + r"))?)"
+        ),
+        # District + Province
+        re.compile(
+            r"((?:(?:ตลาดน้ำ|ตลาด|วัด|ซอย|ถนน|หมู่บ้าน|หมู่ที่|ชุมชน|คอนโด|อพาร์ทเม้นท์|โรงเรียน|รพ\.|สะพาน|บ้าน|พื้นที่)\s*[ก-๙0-9\.\-\/\(\)\s]+?)?"
+            r"(?:อำเภอ|อ\.|เขต)\s*[ก-๙0-9]+"
+            r"(?:\s*(?:จังหวัด|จ\.)?\s*(?:" + _PROV_LIST + r")))"
+        ),
+        # Landmark with Province
+        re.compile(
+            r"((?:(?:ตลาดน้ำ|ตลาด|วัด|ซอย|ถนน|หมู่บ้าน|หมู่ที่|ชุมชน|คอนโด|อพาร์ทเม้นท์|โรงเรียน|รพ\.|สะพาน|บ้าน|พื้นที่)\s*[ก-๙0-9\.\-\/\(\)\s]+?)"
+            r"(?:จังหวัด|จ\.)\s*(?:" + _PROV_LIST + r"))"
+        )
+    ]
     
     # Count patterns
     COUNT_PATTERNS = {
@@ -56,8 +81,17 @@ class ExtractionRulesEngine:
         return m.group(0).strip() if m else None
 
     def extract_location(self, text: str) -> Optional[str]:
-        m = self.LOCATION_REGEX.search(str(text))
-        return m.group(0).strip() if m else None
+        cleaned_text = str(text or "")
+        for pattern in self.LOCATION_PATTERNS:
+            m = pattern.search(cleaned_text)
+            if m:
+                loc = m.group(0).strip()
+                # Clean trailing noise/polite particles
+                loc = re.sub(r"[\r\n\t]+", " ", loc)
+                loc = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|จ้า|ด่วน|เลย|นะคร้าบ|นะค่ะ|นะคะ|ตอนนี้|พิกัด).*$", "", loc)
+                if len(loc.strip()) > 3:
+                    return loc.strip()
+        return None
         
     def extract_coords(self, text: str) -> Tuple[Optional[float], Optional[float]]:
         m = self.COORDS_REGEX.search(str(text))

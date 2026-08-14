@@ -137,6 +137,7 @@ def main():
                 print(f"\n[Executing Task 2 for {round_name}: NER & Entity/Count Extraction]")
                 task2_df = execute_task2_pipeline(
                     output_dir=base_output_dir,
+                    selected_models=selected_models,
                     use_gpu=args.use_gpu,
                     force=args.force,
                     notifier=notifier,

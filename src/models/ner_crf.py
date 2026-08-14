@@ -7,7 +7,7 @@ NER Tagger Suite implementing:
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 
 try:
     import sklearn_crfsuite
@@ -57,6 +57,127 @@ class SklearnCRFTagger:
     def predict(self, X_sents: List[List[str]]) -> List[List[str]]:
         X_feats = [self._sent2features(s) for s in X_sents]
         return self.crf.predict(X_feats)
+
+
+from pythainlp.tokenize import word_tokenize
+try:
+    from pythainlp.corpus import provinces
+    _PROV_SET = set(provinces())
+except Exception:
+    _PROV_SET = set()
+
+
+class ThaiLocationCRFTagger:
+    """
+    ML-based Sequence Tagger for Location Span Extraction using sklearn-crfsuite CRF.
+    Converts (text, gt_location) pairs into BIO sequence tags, trains CRF, and decodes exact substring spans.
+    """
+    def __init__(self, c1: float = 0.01, c2: float = 0.01, max_iterations: int = 60):
+        if not HAS_CRFSUITE:
+            raise ImportError("sklearn-crfsuite is not installed.")
+        self.crf = sklearn_crfsuite.CRF(
+            algorithm="lbfgs",
+            c1=c1,
+            c2=c2,
+            max_iterations=max_iterations,
+            all_possible_transitions=True
+        )
+
+    def _extract_bio_spans(self, text: str, loc_str: Optional[str]) -> Tuple[List[str], List[str]]:
+        text = str(text or "")
+        loc_str = str(loc_str or "").strip()
+        tokens = word_tokenize(text, engine="newmm", keep_whitespace=True)
+        tags = ["O"] * len(tokens)
+        if not loc_str or loc_str.lower() in ("nan", "none", "null") or loc_str not in text:
+            return tokens, tags
+            
+        start_c = text.find(loc_str)
+        end_c = start_c + len(loc_str)
+        
+        cur = 0
+        first = True
+        for i, tok in enumerate(tokens):
+            s = cur
+            e = cur + len(tok)
+            cur = e
+            if max(s, start_c) < min(e, end_c) and tok.strip():
+                tags[i] = "B-LOC" if first else "I-LOC"
+                first = False
+        return tokens, tags
+
+    def _token2features(self, tokens: List[str], i: int) -> Dict[str, Any]:
+        w = tokens[i].strip()
+        feat = {
+            "bias": 1.0,
+            "word": w,
+            "len": len(w),
+            "isdigit": w.isdigit(),
+            "is_prov": w in _PROV_SET or any(w.startswith(p) for p in ["จ.", "จังหวัด"]),
+            "is_dist": any(w.startswith(p) for p in ["อ.", "อำเภอ", "เขต"]),
+            "is_subdist": any(w.startswith(p) for p in ["ต.", "ตำบล", "แขวง"]),
+            "is_land": any(w.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
+        }
+        for offset, prefix in [(-2, "-2:"), (-1, "-1:"), (1, "+1:"), (2, "+2:")]:
+            idx = i + offset
+            if 0 <= idx < len(tokens):
+                nw = tokens[idx].strip()
+                feat[f"{prefix}word"] = nw
+                feat[f"{prefix}is_prov"] = nw in _PROV_SET or any(nw.startswith(p) for p in ["จ.", "จังหวัด"])
+                feat[f"{prefix}is_dist"] = any(nw.startswith(p) for p in ["อ.", "อำเภอ", "เขต"])
+                feat[f"{prefix}is_subdist"] = any(nw.startswith(p) for p in ["ต.", "ตำบล", "แขวง"])
+                feat[f"{prefix}is_land"] = any(nw.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
+        if i == 0:
+            feat["BOS"] = True
+        if i == len(tokens) - 1:
+            feat["EOS"] = True
+        return feat
+
+    def fit(self, texts: List[str], gt_locations: List[Optional[str]]):
+        """Fits CRF model on training text and location annotations."""
+        X_feats = []
+        y_tags = []
+        for text, loc in zip(texts, gt_locations):
+            tokens, tags = self._extract_bio_spans(text, loc)
+            feats = [self._token2features(tokens, i) for i in range(len(tokens))]
+            X_feats.append(feats)
+            y_tags.append(tags)
+        self.crf.fit(X_feats, y_tags)
+        return self
+
+    def predict(self, texts: List[str]) -> List[str]:
+        """Predicts extracted location string from input text preserving original formatting."""
+        extracted_locations = []
+        for text in texts:
+            text_str = str(text or "")
+            tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+            if not tokens:
+                extracted_locations.append("")
+                continue
+            feats = [self._token2features(tokens, i) for i in range(len(tokens))]
+            preds = self.crf.predict_single(feats)
+            
+            # Reconstruct original character offsets
+            cur = 0
+            spans = []
+            for tok in tokens:
+                s = cur
+                e = cur + len(tok)
+                cur = e
+                spans.append((s, e))
+                
+            loc_idx = [i for i, tag in enumerate(preds) if tag in ("B-LOC", "I-LOC") and tokens[i].strip()]
+            
+            # Strip leading prepositions from predicted span
+            while loc_idx and tokens[loc_idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                loc_idx.pop(0)
+                
+            if loc_idx:
+                start_char = spans[loc_idx[0]][0]
+                end_char = spans[loc_idx[-1]][1]
+                extracted_locations.append(text_str[start_char:end_char].strip())
+            else:
+                extracted_locations.append("")
+        return extracted_locations
 
 
 def argmax(vec):

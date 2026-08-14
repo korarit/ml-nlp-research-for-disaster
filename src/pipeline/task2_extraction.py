@@ -17,6 +17,7 @@ from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.regressors import get_regressor, ALL_REGRESSOR_NAMES
 from src.models.rules_engine import ExtractionRulesEngine
+from src.models.ner_crf import ThaiLocationCRFTagger
 from src.utils.metrics import (
     compute_count_regression_metrics, compute_string_match_metrics,
     compute_classification_metrics
@@ -281,25 +282,34 @@ def run_task2_approach_b2_regression(
     }, np.array(all_y_true), np.array(all_y_pred)
 
 
-def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
-    """Evaluates Approach B3 Token Classification (CRF Sequence Tagger) on Location/Name entities."""
-    texts = test_df["generated_text"].tolist()
-    engine = ExtractionRulesEngine()
+def run_task2_approach_b3_crf(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Evaluates Approach B3 Token Classification (ML-based CRF Sequence Tagger) for Location Extraction."""
+    tagger = ThaiLocationCRFTagger()
+    train_texts = train_df["generated_text"].tolist()
+    train_locs = extract_gt_entity_vector(train_df, "gt_location_name")
     
+    # Train CRF model on BIO-annotated location spans
+    tagger.fit(train_texts, train_locs)
+    
+    test_texts = test_df["generated_text"].tolist()
+    pred_locs = tagger.predict(test_texts)
+    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
+    loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
+    engine = ExtractionRulesEngine()
     true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
-    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
+    pred_phones = [str(engine.extract_phone(t) or "") for t in test_texts]
     phone_m = compute_string_match_metrics(true_phones, pred_phones)
 
     true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
-    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
+    pred_urls = [str(engine.extract_map_url(t) or "") for t in test_texts]
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
-    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
-    loc_m = compute_string_match_metrics(true_locs, pred_locs)
-
     true_coord_strs = extract_gt_coords_vector(test_df)
-    pred_coords = [engine.extract_coords(t) for t in texts]
+    pred_coords = [engine.extract_coords(t) for t in test_texts]
     pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
     coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
     
@@ -320,7 +330,7 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
         "count_exact_match": 0.0,
         "nonzero_count_mae": 0.0,
         "nonzero_count_exact_match": 0.0
-    }
+    }, pred_locs
 
 
 def run_task2_approach_c_hybrid(
@@ -329,10 +339,12 @@ def run_task2_approach_c_hybrid(
     best_regressor_name: str = "XGBRegressor",
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
-    X_test_vec: Optional[Any] = None
+    X_test_vec: Optional[Any] = None,
+    crf_pred_locs: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Evaluates Approach C: Hybrid System (Best ML Regressor for counts + Rules Engine for Regex targets).
+    Evaluates Approach C: Adaptive Hybrid System
+    (ML CRF for Location + Best ML Regressor for counts + Regex Rules Engine for Phone/URL/Coords).
     """
     res_a = run_task2_approach_a_rules(test_df)
     res_reg, _, _ = run_task2_approach_b2_regression(
@@ -340,8 +352,17 @@ def run_task2_approach_c_hybrid(
         X_train_vec=X_train_vec, X_test_vec=X_test_vec
     )
     
+    if crf_pred_locs is not None:
+        true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
+        loc_m = compute_string_match_metrics(true_locs, crf_pred_locs)
+        loc_exact = loc_m["gt_match_rate"]
+        loc_f1 = loc_m["f1"]
+    else:
+        loc_exact = res_a["location_exact_match"]
+        loc_f1 = res_a["location_f1"]
+    
     return {
-        "approach": f"Approach C (Hybrid Rules + {best_regressor_name}) ⭐",
+        "approach": f"Approach C (Hybrid Rules + ML CRF + {best_regressor_name}) [Best Hybrid]",
         "f1": res_reg["f1"],
         "f2": res_reg["f2"],
         "phone_exact_match": res_a["phone_exact_match"],
@@ -350,8 +371,8 @@ def run_task2_approach_c_hybrid(
         "map_url_f1": res_a["map_url_f1"],
         "coords_exact_match": res_a["coords_exact_match"],
         "coords_f1": res_a["coords_f1"],
-        "location_exact_match": res_a["location_exact_match"],
-        "location_f1": res_a["location_f1"],
+        "location_exact_match": loc_exact,
+        "location_f1": loc_f1,
         "mean_count_mae": res_reg["mean_count_mae"],
         "mean_count_rmse": res_reg["mean_count_rmse"],
         "count_exact_match": res_reg["count_exact_match"],
@@ -362,8 +383,8 @@ def run_task2_approach_c_hybrid(
 
 def execute_task2_pipeline(
     output_dir: str,
+    selected_models: List[str] = None,
     use_gpu: bool = True,
-    selected_regressors: List[str] = None,
     force: bool = False,
     notifier: Optional[Any] = None,
     train_path: str = DEFAULT_TRAIN_PATH,
@@ -430,47 +451,102 @@ def execute_task2_pipeline(
         notify_step(res_a)
     
     # 2. Approach B1 (Binned Classifiers)
-    app_b1_name = "Approach B1 (Binned XGBClassifier)"
-    if not should_skip(app_b1_name):
-        print(f"--- Task 2 Running: {app_b1_name} ---")
-        res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
-        results.append(res_b1)
-        pd.DataFrame(results).to_csv(task2_csv, index=False)
-        notify_step(res_b1)
+    if selected_models:
+        b1_models = []
+        for m in selected_models:
+            if m in ALL_CLASSIFIER_NAMES or m == "DummyClassifier":
+                b1_models.append(m)
+            elif f"{m}Classifier" in ALL_CLASSIFIER_NAMES:
+                b1_models.append(f"{m}Classifier")
+            elif m.replace("Regressor", "Classifier") in ALL_CLASSIFIER_NAMES:
+                b1_models.append(m.replace("Regressor", "Classifier"))
+            else:
+                b1_models.append(m)
+    else:
+        b1_models = ALL_CLASSIFIER_NAMES
+
+    for clf_name in b1_models:
+        app_b1_name = f"Approach B1 (Binned {clf_name})"
+        if not should_skip(app_b1_name):
+            print(f"--- Task 2 Running: {app_b1_name} ---")
+            try:
+                res_b1 = run_task2_approach_b1_binned(train_df, test_df, clf_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                results.append(res_b1)
+                pd.DataFrame(results).to_csv(task2_csv, index=False)
+                notify_step(res_b1)
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {app_b1_name}: {e}")
     
     # 3. Approach B2 (Regressors benchmark)
-    reg_models = selected_regressors or ["DummyRegressor", "Ridge", "RandomForestRegressor", "XGBRegressor", "LGBMRegressor"]
+    if selected_models:
+        b2_models = []
+        for m in selected_models:
+            if m in ALL_REGRESSOR_NAMES or m == "DummyRegressor":
+                b2_models.append(m)
+            elif f"{m}Regressor" in ALL_REGRESSOR_NAMES:
+                b2_models.append(f"{m}Regressor")
+            elif m.replace("Classifier", "Regressor") in ALL_REGRESSOR_NAMES:
+                b2_models.append(m.replace("Classifier", "Regressor"))
+            else:
+                b2_models.append(m)
+    else:
+        b2_models = ALL_REGRESSOR_NAMES
+
     reg_predictions = {}
     y_true_all = None
     
-    for r_name in reg_models:
+    for r_name in b2_models:
         app_b2_name = f"Approach B2 (Regressor {r_name})"
         if not should_skip(app_b2_name):
             print(f"--- Task 2 Running: {app_b2_name} ---")
-            res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
-            results.append(res_b2)
-            reg_predictions[r_name] = y_p
-            y_true_all = y_t
-            pd.DataFrame(results).to_csv(task2_csv, index=False)
-            notify_step(res_b2)
+            try:
+                res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                results.append(res_b2)
+                reg_predictions[r_name] = y_p
+                y_true_all = y_t
+                pd.DataFrame(results).to_csv(task2_csv, index=False)
+                notify_step(res_b2)
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {app_b2_name}: {e}")
         
     # 4. Approach B3 (CRF Sequence Tagger)
     app_b3_name = "Approach B3 (CRF Sequence Tagger)"
+    crf_pred_locs = None
     if not should_skip(app_b3_name):
         print(f"--- Task 2 Running: {app_b3_name} ---")
-        res_b3 = run_task2_approach_b3_crf(test_df)
-        results.append(res_b3)
-        pd.DataFrame(results).to_csv(task2_csv, index=False)
-        notify_step(res_b3)
+        try:
+            res_b3, crf_pred_locs = run_task2_approach_b3_crf(train_df, test_df)
+            results.append(res_b3)
+            pd.DataFrame(results).to_csv(task2_csv, index=False)
+            notify_step(res_b3)
+        except Exception as e:
+            print(f"Warning: Failed to evaluate {app_b3_name}: {e}")
     
-    # 5. Approach C (Hybrid System)
-    app_c_name = "Approach C (Hybrid Rules + XGBRegressor) ⭐"
+    # 5. Approach C (Hybrid System) - Dynamically select best regressor from Approach B2
+    best_reg_name = "XGBRegressor"
+    min_mae = float("inf")
+    for r in results:
+        app_title = r.get("approach", "")
+        if app_title.startswith("Approach B2 (Regressor ") and "DummyRegressor" not in app_title:
+            cand_mae = r.get("mean_count_mae", float("inf"))
+            if cand_mae < min_mae:
+                min_mae = cand_mae
+                best_reg_name = app_title.replace("Approach B2 (Regressor ", "").rstrip(")")
+                
+    app_c_name = f"Approach C (Hybrid Rules + ML CRF + {best_reg_name}) [Best Hybrid]"
     if not should_skip(app_c_name):
         print(f"--- Task 2 Running: {app_c_name} ---")
-        res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
-        results.append(res_c)
-        pd.DataFrame(results).to_csv(task2_csv, index=False)
-        notify_step(res_c)
+        try:
+            res_c = run_task2_approach_c_hybrid(
+                train_df, test_df, best_regressor_name=best_reg_name,
+                use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                crf_pred_locs=crf_pred_locs
+            )
+            results.append(res_c)
+            pd.DataFrame(results).to_csv(task2_csv, index=False)
+            notify_step(res_c)
+        except Exception as e:
+            print(f"Warning: Failed to evaluate {app_c_name}: {e}")
     
     # Wilcoxon Residual test on regression models
     if y_true_all is not None:
