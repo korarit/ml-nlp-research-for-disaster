@@ -33,10 +33,10 @@ class SimpleKeywordRules:
 class ExtractionRulesEngine:
     """Approach A Rule-Based Extraction Engine for Phone, Coordinates, Map URLs, Locations, and Counts."""
     
-    PHONE_REGEX = re.compile(r"(?:0[689]\d{8}|0\d{1,2}-\d{3}-\d{4}|0\d{8,9})")
-    COORDS_REGEX = re.compile(r"(1\d\.\d{3,})\s*,\s*(100\.\d{3,})")
+    PHONE_REGEX = re.compile(r"(?:0[689][0-9][\s-]?[0-9]{3,4}[\s-]?[0-9]{4}|0[0-9]{1,2}[\s-]?[0-9]{3}[\s-]?[0-9]{4})")
+    COORDS_REGEX = re.compile(r"(\d{1,2}\.\d{3,})\s*,\s*(9[7-9]\.\d{3,}|10[0-5]\.\d{3,})")
     MAP_URL_REGEX = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|www\.google\.com/maps|maps\.google\.com)[^\s,]+")
-    LOCATION_REGEX = re.compile(r"(?:ที่|บริเวณ|ซอย|ถนน|ต\.|อ\.|จ\.|หมู่ที่?|แขวง|เขต|อพาร์ทเม้นท์|บ้าน|หมู่บ้าน|ริม|ใกล้|ตรงข้าม)\s*([ก-๙0-9\s]+)")
+    LOCATION_REGEX = re.compile(r"(?:ที่|บริเวณ|ซอย|ถนน|ต\.|อ\.|จ\.|หมู่ที่?|แขวง|เขต|อพาร์ทเม้นท์|บ้าน|หมู่บ้าน|ริม|ใกล้|ตรงข้าม)\s*([ก-๙0-9\.\s\-\/]+?)(?=\s+(?:พิกัด|เบอร์|โทร|ติดต่อ|https?://|\n|\r|$))")
     
     # Count patterns
     COUNT_PATTERNS = {
@@ -53,11 +53,11 @@ class ExtractionRulesEngine:
     
     def extract_phone(self, text: str) -> Optional[str]:
         m = self.PHONE_REGEX.search(str(text))
-        return m.group(0) if m else None
+        return m.group(0).strip() if m else None
 
     def extract_location(self, text: str) -> Optional[str]:
         m = self.LOCATION_REGEX.search(str(text))
-        return m.group(0) if m else None
+        return m.group(0).strip() if m else None
         
     def extract_coords(self, text: str) -> Tuple[Optional[float], Optional[float]]:
         m = self.COORDS_REGEX.search(str(text))
@@ -70,7 +70,7 @@ class ExtractionRulesEngine:
         
     def extract_map_url(self, text: str) -> Optional[str]:
         m = self.MAP_URL_REGEX.search(str(text))
-        return m.group(0) if m else None
+        return m.group(0).strip() if m else None
         
     def extract_count(self, text: str, field_name: str) -> int:
         patterns = self.COUNT_PATTERNS.get(field_name, [])
@@ -98,6 +98,9 @@ class ClauseSplitterRules:
     def split_clauses(self, text: str) -> List[str]:
         clauses = self.CONJUNCTION_PATTERN.split(str(text))
         return [c.strip() for c in clauses if len(c.strip()) > 3]
+        
+    def extract_clauses(self, text: str) -> List[str]:
+        return self.split_clauses(text)
         
     def extract_victims(self, text: str) -> List[Dict[str, Any]]:
         clauses = self.split_clauses(text)
@@ -155,6 +158,9 @@ class PediatricIITTRules:
                 return "YELLOW"
         return "GREEN"
         
+    def classify(self, text: str) -> str:
+        return self.predict_one(text)
+        
     def predict(self, texts: List[str]) -> List[str]:
         return [self.predict_one(t) for t in texts]
 
@@ -174,6 +180,9 @@ class AdultIITTRules:
             if re.search(pat, s):
                 return "YELLOW"
         return "GREEN"
+        
+    def classify(self, text: str) -> str:
+        return self.predict_one(text)
         
     def predict(self, texts: List[str]) -> List[str]:
         return [self.predict_one(t) for t in texts]

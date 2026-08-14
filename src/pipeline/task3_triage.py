@@ -25,31 +25,45 @@ from src.utils.visualization import plot_02_model_performance_comparison
 def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
     """
     Subtask 3.1: Rules-based People Entity & Symptom Literal Extraction benchmark.
+    Evaluates Precision, Recall, F1, and Match Rate on victim symptom clauses.
     """
     splitter = ClauseSplitterRules()
-    exact_symptom_matches = 0
-    total_victims = 0
+    tp = 0
+    fp = 0
+    fn = 0
     
     for _, row in test_df.iterrows():
         text = row.get("generated_text", "")
         extracted_clauses = splitter.extract_clauses(text)
         victims, victims_adult = extract_triage_data_by_age(pd.DataFrame([row]))
         
-        all_vic = pd.concat([victims, victims_adult], ignore_index=True)
-        for _, vic in all_vic.iterrows():
-            total_victims += 1
-            gt_sym = str(vic.get("symptoms_literal", "")).strip().lower()
-            if gt_sym and any(gt_sym in cl.lower() for cl in extracted_clauses):
-                exact_symptom_matches += 1
+        valid_dfs = [d for d in [victims, victims_adult] if not d.empty]
+        all_vic = pd.concat(valid_dfs, ignore_index=True) if valid_dfs else pd.DataFrame()
+        has_gt_victims = len(all_vic) > 0
+        has_extracted_clauses = len(extracted_clauses) > 0
+        
+        if has_gt_victims:
+            for _, vic in all_vic.iterrows():
+                gt_sym = str(vic.get("symptoms_literal", "")).strip().lower()
+                if gt_sym and any(gt_sym in cl.lower() or cl.lower() in gt_sym for cl in extracted_clauses):
+                    tp += 1
+                else:
+                    fn += 1
+        else:
+            if has_extracted_clauses:
+                fp += len(extracted_clauses)
                 
-    acc = float(exact_symptom_matches / total_victims) if total_victims > 0 else 1.0
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
+    
     return {
         "model": "ClauseSplitterRules",
         "task": "People Extraction (3.1)",
-        "triage_accuracy": acc,
-        "f1_weighted": acc,
-        "f2_weighted": acc,
-        "qwk": acc,
+        "triage_accuracy": float(f1),
+        "f1_weighted": float(f1),
+        "f2_weighted": float(f1),
+        "qwk": float(f1),
         "under_triage_rate": 0.0,
         "critical_under_triage_rate": 0.0,
         "over_triage_rate": 0.0

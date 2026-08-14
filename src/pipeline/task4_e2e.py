@@ -188,14 +188,23 @@ def execute_task4_e2e_pipeline(
     # 1. Classification Metrics
     task1_metrics = compute_classification_metrics(y_true_help, y_pred_help)
     
-    # 2. Clinical Triage Metrics
+    # 2. Entity Extraction Alignment Metrics
+    true_phones = [str(val).strip() if pd.notna(val) and str(val).lower() not in ("nan", "none", "null") else "" for val in test_df.get("gt_victim_phone", [])]
+    pred_phones = [out["extracted_entities"].get("phone", "") if out.get("extracted_entities") else "" for out in e2e_outputs]
+    phone_e2e_m = compute_string_match_metrics(true_phones, pred_phones)
+
+    true_urls = [str(val).strip() if pd.notna(val) and str(val).lower() not in ("nan", "none", "null") else "" for val in test_df.get("gt_google_map_url", [])]
+    pred_urls = [out["extracted_entities"].get("map_url", "") if out.get("extracted_entities") else "" for out in e2e_outputs]
+    url_e2e_m = compute_string_match_metrics(true_urls, pred_urls)
+
+    # 3. Clinical Triage Metrics
     _, test_adult = extract_triage_data_by_age(test_df)
     true_triages = test_adult["triage_color"].tolist() if len(test_adult) > 0 else ["GREEN"] * len(texts_test)
     pred_triages = [out["victims"][0]["triage_color"] if out["victims"] else "GREEN" for out in e2e_outputs[:len(true_triages)]]
     
     clinical_metrics = compute_triage_clinical_metrics(true_triages, pred_triages)
     
-    # 3. Latency Benchmarks (GPU & CPU)
+    # 4. Latency Benchmarks (GPU & CPU)
     lat_gpu = measure_inference_latency(pipeline.process_tweet, n_runs=min(latency_runs, 200), use_gpu=True) if use_gpu else {"p95_latency_ms": 0.0, "qps": 0.0}
     lat_cpu = measure_inference_latency(pipeline.process_tweet, n_runs=min(latency_runs, 200), use_gpu=False)
     
@@ -203,6 +212,8 @@ def execute_task4_e2e_pipeline(
         "overall_e2e_f1": task1_metrics["f1"],
         "overall_e2e_f2": task1_metrics["f2"],
         "overall_e2e_accuracy": task1_metrics["accuracy"],
+        "e2e_phone_f1": phone_e2e_m["f1"],
+        "e2e_map_url_f1": url_e2e_m["f1"],
         "clinical_qwk": clinical_metrics["qwk"],
         "critical_under_triage_rate": clinical_metrics["critical_under_triage_rate"],
         "ur_95_ci_str": clinical_metrics["ur_ci_str"],

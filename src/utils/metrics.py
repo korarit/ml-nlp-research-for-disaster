@@ -139,7 +139,10 @@ def compute_triage_clinical_metrics(
 
 
 def compute_count_regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
-    """Computes MAE and RMSE for continuous count regression models."""
+    """
+    Computes MAE, RMSE, and Exact Match for count regression models,
+    handling GT zero/null instances separately to prevent zero-padding score inflation.
+    """
     y_t = np.array(y_true, dtype=float)
     y_p = np.clip(np.array(y_pred, dtype=float), 0, None)  # count cannot be negative
     
@@ -149,10 +152,30 @@ def compute_count_regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> 
     # Exact Match for integer counts
     em = np.mean(np.round(y_t) == np.round(y_p))
     
+    # Non-zero GT metrics
+    nonzero_mask = y_t > 0
+    if np.sum(nonzero_mask) > 0:
+        nonzero_mae = float(mean_absolute_error(y_t[nonzero_mask], y_p[nonzero_mask]))
+        nonzero_rmse = float(root_mean_squared_error(y_t[nonzero_mask], y_p[nonzero_mask]))
+        nonzero_em = float(np.mean(np.round(y_t[nonzero_mask]) == np.round(y_p[nonzero_mask])))
+    else:
+        nonzero_mae, nonzero_rmse, nonzero_em = 0.0, 0.0, 1.0
+        
+    # Zero GT over-prediction rate
+    zero_mask = y_t == 0
+    if np.sum(zero_mask) > 0:
+        zero_overpred_rate = float(np.mean(np.round(y_p[zero_mask]) > 0))
+    else:
+        zero_overpred_rate = 0.0
+    
     return {
         "mae": float(mae),
         "rmse": float(rmse),
-        "exact_match": float(em)
+        "exact_match": float(em),
+        "nonzero_mae": nonzero_mae,
+        "nonzero_rmse": nonzero_rmse,
+        "nonzero_exact_match": nonzero_em,
+        "zero_overpred_rate": zero_overpred_rate
     }
 
 
@@ -175,20 +198,59 @@ def levenshtein_distance(s1: str, s2: str) -> int:
     return previous_row[-1]
 
 
+def sanitize_string_val(val: Any) -> str:
+    """Helper to clean string values, turning NaN / None / 'nan' / '0.0,0.0' into empty string."""
+    if val is None or pd.isna(val):
+        return ""
+    s = str(val).strip()
+    if s.lower() in ("nan", "none", "null", "0.0,0.0", "0.0, 0.0"):
+        return ""
+    return s
+
+
 def compute_string_match_metrics(y_true: List[str], y_pred: List[str]) -> Dict[str, float]:
-    """Computes Exact Match (EM), Jaccard Similarity, and Normalized Levenshtein."""
-    em_count = 0
+    """
+    Computes Exact Match (EM), Precision, Recall, F1, Non-Null GT Match Rate, Null FP Rate,
+    Jaccard Similarity, and Normalized Levenshtein for entity extractions.
+    
+    Ground Truth Policy:
+    - GT is null AND Pred is null: True Negative (TN) -> Excluded from match rate to prevent score inflation.
+    - GT is null BUT Pred is non-null: False Positive (FP) -> Penalized as over-extraction.
+    - GT is non-null AND Pred matches: True Positive (TP).
+    - GT is non-null BUT Pred is wrong/null: False Negative (FN).
+    """
+    tp = 0
+    fp = 0
+    fn = 0
+    fp_null = 0
+    
+    gt_present_count = 0
+    gt_null_count = 0
+    
     jaccard_scores = []
     lev_distances = []
     
     for t_str, p_str in zip(y_true, y_pred):
-        t = str(t_str or "").strip()
-        p = str(p_str or "").strip()
+        t = sanitize_string_val(t_str)
+        p = sanitize_string_val(p_str)
         
-        # Exact match
-        if t.lower() == p.lower():
-            em_count += 1
-            
+        has_gt = len(t) > 0
+        has_pred = len(p) > 0
+        
+        if has_gt:
+            gt_present_count += 1
+            if t.lower() == p.lower():
+                tp += 1
+            else:
+                fn += 1
+                if has_pred:
+                    fp += 1  # wrong value predicted
+        else:
+            gt_null_count += 1
+            if has_pred:
+                fp += 1
+                fp_null += 1
+                
         # Jaccard set match
         set_t = set(t.split())
         set_p = set(p.split())
@@ -205,9 +267,24 @@ def compute_string_match_metrics(y_true: List[str], y_pred: List[str]) -> Dict[s
         norm_dist = dist / max_len if max_len > 0 else 0.0
         lev_distances.append(norm_dist)
         
-    n = max(len(y_true), 1)
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
+    
+    gt_match_rate = tp / gt_present_count if gt_present_count > 0 else 1.0
+    null_fp_rate = fp_null / gt_null_count if gt_null_count > 0 else 0.0
+    
+    # Legacy Exact Match Rate over whole dataset (including TNs) for backward compatibility
+    em_all = (tp + (gt_null_count - fp_null)) / max(len(y_true), 1)
+    
     return {
-        "exact_match_rate": em_count / n,
+        "exact_match_rate": float(em_all),
+        "precision": float(prec),
+        "recall": float(rec),
+        "f1": float(f1),
+        "gt_match_rate": float(gt_match_rate),
+        "null_fp_rate": float(null_fp_rate),
+        "gt_present_count": int(gt_present_count),
         "jaccard_similarity": float(np.mean(jaccard_scores)),
         "normalized_levenshtein": float(np.mean(lev_distances))
     }
