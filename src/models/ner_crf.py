@@ -478,6 +478,9 @@ from sklearn.feature_extraction import DictVectorizer
 from src.models.classifiers import get_classifier
 
 
+from sklearn.preprocessing import LabelEncoder
+
+
 class SlidingWindowTokenClassifier:
     """
     Token Sequence Classification using any Task 1 Classifier (LogisticRegression, SVM, RF, XGB, CatBoost, etc.)
@@ -489,11 +492,37 @@ class SlidingWindowTokenClassifier:
         self.vectorizer = DictVectorizer(sparse=True)
         self.clf = get_classifier(model_name, use_gpu=use_gpu)
         self.multi_ner_helper = ThaiMultiNER_CRFTagger()
+        self.label_encoder = LabelEncoder()
+
+    def _safe_fit_predict(self, X_tr, y_tr, X_te):
+        """Encodes string BIO tags to integers and runs prediction with safe GPU/CPU fallback."""
+        y_encoded = self.label_encoder.fit_transform(y_tr).astype(np.int32)
+        X_tr_in = X_tr.astype(np.float32) if hasattr(X_tr, "astype") else X_tr
+        X_te_in = X_te.astype(np.float32) if hasattr(X_te, "astype") else X_te
+        
+        try:
+            self.clf.fit(X_tr_in, y_encoded)
+            preds_int = self.clf.predict(X_te_in)
+        except Exception as e:
+            # Fallback to CPU sklearn if cuML GPU sparse format issue occurs for specific model
+            from src.models.classifiers import get_classifier
+            cpu_clf = get_classifier(self.model_name, use_gpu=False)
+            cpu_clf.fit(X_tr, y_encoded)
+            preds_int = cpu_clf.predict(X_te)
+            
+        if hasattr(preds_int, "to_numpy"):
+            preds_int = preds_int.to_numpy()
+        elif hasattr(preds_int, "get"):
+            preds_int = preds_int.get()
+        preds_int = np.asarray(preds_int).reshape(-1).astype(int)
+        
+        n_classes = len(self.label_encoder.classes_)
+        preds_int = np.clip(preds_int, 0, n_classes - 1)
+        return self.label_encoder.inverse_transform(preds_int)
 
     def fit_and_predict_cached(self, token_cache: Dict[str, Any]) -> Dict[str, List[str]]:
         """Fast 0.1s fitting and predicting using pre-computed token matrices."""
-        self.clf.fit(token_cache["X_train_mat"], token_cache["y_train_labels"])
-        all_preds = self.clf.predict(token_cache["X_test_mat"])
+        all_preds = self._safe_fit_predict(token_cache["X_train_mat"], token_cache["y_train_labels"], token_cache["X_test_mat"])
         
         pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
         pred_vic_names, pred_rep_names = [], []
@@ -551,7 +580,8 @@ class SlidingWindowTokenClassifier:
                 
         if X_token_dicts:
             X_mat = self.vectorizer.fit_transform(X_token_dicts)
-            self.clf.fit(X_mat, y_token_labels)
+            y_encoded = self.label_encoder.fit_transform(y_token_labels).astype(np.int32)
+            self.clf.fit(X_mat, y_encoded)
         return self
 
     def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
@@ -571,7 +601,15 @@ class SlidingWindowTokenClassifier:
                 continue
             feats = [self.multi_ner_helper._token2features(tokens, i) for i in range(len(tokens))]
             X_mat = self.vectorizer.transform(feats)
-            preds = self.clf.predict(X_mat)
+            preds_int = self.clf.predict(X_mat)
+            if hasattr(preds_int, "to_numpy"):
+                preds_int = preds_int.to_numpy()
+            elif hasattr(preds_int, "get"):
+                preds_int = preds_int.get()
+            preds_int = np.asarray(preds_int).reshape(-1).astype(int)
+            n_classes = len(self.label_encoder.classes_)
+            preds_int = np.clip(preds_int, 0, n_classes - 1)
+            preds = self.label_encoder.inverse_transform(preds_int)
             
             cur = 0
             spans = []
