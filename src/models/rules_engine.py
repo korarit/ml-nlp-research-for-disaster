@@ -117,6 +117,21 @@ class ExtractionRulesEngine:
                     pass
         return 0
         
+    def extract_name(self, text: str) -> Optional[str]:
+        cleaned_text = str(text or "")
+        name_pats = [
+            re.compile(r"(?:นาย|นาง|นางสาว|น้อง|ลุง|ป้า|น้า|อา|คุณ|พี่|หมอ|เฮีย|เจ๊|ตาสี|ยาย)\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
+            re.compile(r"(?:ชื่อ|ผู้แจ้ง|ผู้ติดต่อ|คนแจ้ง)\s*([ก-๙]+(?:\s+[ก-๙]+)?)")
+        ]
+        for pat in name_pats:
+            m = pat.search(cleaned_text)
+            if m:
+                cand = m.group(0).strip()
+                cand = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|โทร|เบอร์|พิกัด).*$", "", cand)
+                if len(cand) > 2:
+                    return cand
+        return None
+
     def extract_all_counts(self, text: str) -> Dict[str, int]:
         return {field: self.extract_count(text, field) for field in self.COUNT_PATTERNS.keys()}
 

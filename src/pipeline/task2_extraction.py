@@ -17,7 +17,11 @@ from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.regressors import get_regressor, ALL_REGRESSOR_NAMES
 from src.models.rules_engine import ExtractionRulesEngine
-from src.models.ner_crf import ThaiLocationCRFTagger
+from src.models.ner_crf import (
+    ThaiLocationCRFTagger, ThaiMultiNER_CRFTagger,
+    SlidingWindowTokenClassifier, BiLSTM_CRF_Tagger,
+    prepare_task2_token_cache
+)
 from src.utils.metrics import (
     compute_count_regression_metrics, compute_string_match_metrics,
     compute_classification_metrics
@@ -45,7 +49,7 @@ def extract_gt_coords_vector(df: pd.DataFrame) -> List[str]:
 
 
 def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
-    """Evaluates Approach A Rule-Based Extraction Engine on Test Dataset."""
+    """Evaluates Approach A Rule-Based Extraction Engine on Test Dataset across all entities and counts."""
     engine = ExtractionRulesEngine()
     texts = test_df["generated_text"].tolist()
     
@@ -69,6 +73,15 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     pred_coords = [engine.extract_coords(t) for t in texts]
     pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
     coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
+
+    # Names match
+    true_vics = extract_gt_entity_vector(test_df, "gt_victim_name")
+    pred_vics = [str(engine.extract_name(t) or "") for t in texts]
+    vic_m = compute_string_match_metrics(true_vics, pred_vics)
+
+    true_reps = extract_gt_entity_vector(test_df, "gt_reporter_name")
+    pred_reps = [str(engine.extract_name(t) or "") for t in texts]
+    rep_m = compute_string_match_metrics(true_reps, pred_reps)
     
     # Count metrics
     count_maes = []
@@ -97,6 +110,10 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
         "approach": "Approach A (Rules)",
         "f1": float(np.mean(count_f1s)) if count_f1s else 0.0,
         "f2": float(np.mean(count_f2s)) if count_f2s else 0.0,
+        "victim_name_exact_match": vic_m["gt_match_rate"],
+        "victim_name_f1": vic_m["f1"],
+        "reporter_name_exact_match": rep_m["gt_match_rate"],
+        "reporter_name_f1": rep_m["f1"],
         "phone_exact_match": phone_m["gt_match_rate"],
         "phone_f1": phone_m["f1"],
         "map_url_exact_match": url_m["gt_match_rate"],
@@ -113,20 +130,18 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-from src.models.ner_crf import ThaiLocationCRFTagger, ThaiMultiNER_CRFTagger
-
-
 def run_task2_approach_b1_binned(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     model_name: str = "XGBClassifier",
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
-    X_test_vec: Optional[Any] = None
-) -> Dict[str, Any]:
+    X_test_vec: Optional[Any] = None,
+    token_cache: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """
-    Evaluates Approach B1: Pure ML Binned Categorical Classification (0, 1, 2, 3+) across count fields.
-    Does NOT use Rule-based engine for any field.
+    Evaluates Approach B1: Pure ML Binned Categorical Classification (0, 1, 2, 3+) across counts
+    AND Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coords).
     """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
@@ -161,24 +176,53 @@ def run_task2_approach_b1_binned(
             f1s.append(clf_m["f1_weighted"])
             f2s.append(clf_m["f2"])
             
+    tagger = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
+    if token_cache is not None:
+        preds_entities = tagger.fit_and_predict_cached(token_cache)
+    else:
+        train_texts = train_df["generated_text"].tolist()
+        tagger.fit(
+            train_texts,
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        test_texts = test_df["generated_text"].tolist()
+        preds_entities = tagger.predict_entities(test_texts)
+    
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
+    
     return {
         "approach": f"Approach B1 (Binned {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": 0.0,
-        "phone_f1": 0.0,
-        "map_url_exact_match": 0.0,
-        "map_url_f1": 0.0,
-        "coords_exact_match": 0.0,
-        "coords_f1": 0.0,
-        "location_exact_match": 0.0,
-        "location_f1": 0.0,
+        "victim_name_exact_match": vic_m["gt_match_rate"],
+        "victim_name_f1": vic_m["f1"],
+        "reporter_name_exact_match": rep_m["gt_match_rate"],
+        "reporter_name_f1": rep_m["f1"],
+        "phone_exact_match": phone_m["gt_match_rate"],
+        "phone_f1": phone_m["f1"],
+        "map_url_exact_match": url_m["gt_match_rate"],
+        "map_url_f1": url_m["f1"],
+        "coords_exact_match": coords_m["gt_match_rate"],
+        "coords_f1": coords_m["f1"],
+        "location_exact_match": loc_m["gt_match_rate"],
+        "location_f1": loc_m["f1"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
         "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
         "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
-    }
+    }, preds_entities
 
 
 def run_task2_approach_b2_regression(
@@ -187,11 +231,12 @@ def run_task2_approach_b2_regression(
     model_name: str = "XGBRegressor",
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
-    X_test_vec: Optional[Any] = None
-) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
+    X_test_vec: Optional[Any] = None,
+    token_cache: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray, Dict[str, List[str]]]:
     """
-    Evaluates Approach B2: Pure ML Continuous Numerical Regressors across count fields.
-    Does NOT use Rule-based engine for any field.
+    Evaluates Approach B2: Pure ML Continuous Numerical Regressors across counts
+    AND Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coords).
     """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
@@ -228,69 +273,116 @@ def run_task2_approach_b2_regression(
             f2s.append(clf_m["f2"])
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
+
+    paired_clf = model_name.replace("Regressor", "Classifier")
+    if paired_clf not in ALL_CLASSIFIER_NAMES:
+        paired_clf = "LogisticRegression"
+    tagger = SlidingWindowTokenClassifier(model_name=paired_clf, use_gpu=use_gpu)
+    if token_cache is not None:
+        preds_entities = tagger.fit_and_predict_cached(token_cache)
+    else:
+        train_texts = train_df["generated_text"].tolist()
+        tagger.fit(
+            train_texts,
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        test_texts = test_df["generated_text"].tolist()
+        preds_entities = tagger.predict_entities(test_texts)
+    
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
             
     return {
         "approach": f"Approach B2 (Regressor {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": 0.0,
-        "phone_f1": 0.0,
-        "map_url_exact_match": 0.0,
-        "map_url_f1": 0.0,
-        "coords_exact_match": 0.0,
-        "coords_f1": 0.0,
-        "location_exact_match": 0.0,
-        "location_f1": 0.0,
+        "victim_name_exact_match": vic_m["gt_match_rate"],
+        "victim_name_f1": vic_m["f1"],
+        "reporter_name_exact_match": rep_m["gt_match_rate"],
+        "reporter_name_f1": rep_m["f1"],
+        "phone_exact_match": phone_m["gt_match_rate"],
+        "phone_f1": phone_m["f1"],
+        "map_url_exact_match": url_m["gt_match_rate"],
+        "map_url_f1": url_m["f1"],
+        "coords_exact_match": coords_m["gt_match_rate"],
+        "coords_f1": coords_m["f1"],
+        "location_exact_match": loc_m["gt_match_rate"],
+        "location_f1": loc_m["f1"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
         "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
         "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
-    }, np.array(all_y_true), np.array(all_y_pred)
+    }, np.array(all_y_true), np.array(all_y_pred), preds_entities
 
 
-def run_task2_approach_b3_crf(
+def run_task2_approach_b3_token_tagger(
     train_df: pd.DataFrame,
-    test_df: pd.DataFrame
-) -> Tuple[Dict[str, Any], List[str]]:
+    test_df: pd.DataFrame,
+    model_name: str = "CRF",
+    use_gpu: bool = True,
+    token_cache: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """
-    Evaluates Approach B3: Pure ML Token Sequence Tagging (CRF) for all Named Entities (Location, Phone, URL, Coordinates).
-    Does NOT use Rule-based engine for any field.
+    Evaluates Approach B3: Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coordinates).
+    Supports:
+    1. "CRF": sklearn-crfsuite CRF
+    2. "BiLSTM-CRF": PyTorch GPU BiLSTM-CRF
+    3. Any Task 1 Classifier (e.g. "LogisticRegression", "RandomForestClassifier", "XGBClassifier", etc.) via Sliding Window.
     """
-    tagger = ThaiMultiNER_CRFTagger()
     train_texts = train_df["generated_text"].tolist()
     train_locs = extract_gt_entity_vector(train_df, "gt_location_name")
     train_phones = extract_gt_entity_vector(train_df, "gt_victim_phone")
     train_urls = extract_gt_entity_vector(train_df, "gt_google_map_url")
     train_lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
     train_lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
-    
-    # Train Pure ML Multi-Entity CRF model
-    tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs)
-    
-    test_texts = test_df["generated_text"].tolist()
-    preds = tagger.predict_entities(test_texts)
-    
-    # Location metrics (ML CRF)
-    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-    loc_m = compute_string_match_metrics(true_locs, preds["locations"])
+    train_vics = extract_gt_entity_vector(train_df, "gt_victim_name")
+    train_reps = extract_gt_entity_vector(train_df, "gt_reporter_name")
 
-    # Phone metrics (ML CRF)
-    true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
-    phone_m = compute_string_match_metrics(true_phones, preds["phones"])
-
-    # Map URL metrics (ML CRF)
-    true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
-    url_m = compute_string_match_metrics(true_urls, preds["urls"])
+    if model_name in ("CRF", "CRF_LBFGS"):
+        tagger = ThaiMultiNER_CRFTagger()
+        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
+        test_texts = test_df["generated_text"].tolist()
+        preds = tagger.predict_entities(test_texts)
+    elif model_name in ("BiLSTM-CRF", "BiLSTM_CRF", "BiLSTM"):
+        tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
+        test_texts = test_df["generated_text"].tolist()
+        preds = tagger.predict_entities(test_texts)
+    else:
+        tagger = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
+        if token_cache is not None:
+            preds = tagger.fit_and_predict_cached(token_cache)
+        else:
+            tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
+            test_texts = test_df["generated_text"].tolist()
+            preds = tagger.predict_entities(test_texts)
     
-    # Coordinates metrics (ML CRF)
-    true_coord_strs = extract_gt_coords_vector(test_df)
-    coords_m = compute_string_match_metrics(true_coord_strs, preds["coords"])
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds["reporter_names"])
     
     return {
-        "approach": "Approach B3 (CRF Sequence Tagger)",
+        "approach": f"Approach B3 (Token Tagger {model_name})",
         "f1": loc_m["f1"],
         "f2": loc_m["f1"],
+        "victim_name_exact_match": vic_m["gt_match_rate"],
+        "victim_name_f1": vic_m["f1"],
+        "reporter_name_exact_match": rep_m["gt_match_rate"],
+        "reporter_name_f1": rep_m["f1"],
         "phone_exact_match": phone_m["gt_match_rate"],
         "phone_f1": phone_m["f1"],
         "map_url_exact_match": url_m["gt_match_rate"],
@@ -304,41 +396,51 @@ def run_task2_approach_b3_crf(
         "count_exact_match": 0.0,
         "nonzero_count_mae": 0.0,
         "nonzero_count_exact_match": 0.0
-    }, preds["locations"]
+    }, preds
 
 
 def run_task2_approach_c_hybrid(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     best_regressor_name: str = "XGBRegressor",
+    best_token_model_name: str = "CRF",
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
     X_test_vec: Optional[Any] = None,
-    crf_pred_locs: Optional[List[str]] = None
+    best_pred_entities: Optional[Dict[str, List[str]]] = None,
+    token_cache: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Evaluates Approach C: Adaptive Hybrid System
-    (ML CRF for Location + Best ML Regressor for counts + Regex Rules Engine for Phone/URL/Coords).
+    (Best ML Token Tagger for Names & Location + Best ML Regressor for counts + Regex Rules Engine for Phone/URL/Coords).
     """
     res_a = run_task2_approach_a_rules(test_df)
-    res_reg, _, _ = run_task2_approach_b2_regression(
+    res_reg, _, _, _ = run_task2_approach_b2_regression(
         train_df, test_df, best_regressor_name, use_gpu=use_gpu,
-        X_train_vec=X_train_vec, X_test_vec=X_test_vec
+        X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+        token_cache=token_cache
     )
     
-    if crf_pred_locs is not None:
-        true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-        loc_m = compute_string_match_metrics(true_locs, crf_pred_locs)
-        loc_exact = loc_m["gt_match_rate"]
-        loc_f1 = loc_m["f1"]
+    if best_pred_entities is not None:
+        loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), best_pred_entities["locations"])
+        vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), best_pred_entities["victim_names"])
+        rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), best_pred_entities["reporter_names"])
+        loc_exact, loc_f1 = loc_m["gt_match_rate"], loc_m["f1"]
+        vic_exact, vic_f1 = vic_m["gt_match_rate"], vic_m["f1"]
+        rep_exact, rep_f1 = rep_m["gt_match_rate"], rep_m["f1"]
     else:
-        loc_exact = res_a["location_exact_match"]
-        loc_f1 = res_a["location_f1"]
+        loc_exact, loc_f1 = res_a["location_exact_match"], res_a["location_f1"]
+        vic_exact, vic_f1 = res_a["victim_name_exact_match"], res_a["victim_name_f1"]
+        rep_exact, rep_f1 = res_a["reporter_name_exact_match"], res_a["reporter_name_f1"]
     
     return {
-        "approach": f"Approach C (Hybrid Rules + ML CRF + {best_regressor_name}) [Best Hybrid]",
+        "approach": f"Approach C (Hybrid Rules + ML {best_token_model_name} + {best_regressor_name}) [Best Hybrid]",
         "f1": res_reg["f1"],
         "f2": res_reg["f2"],
+        "victim_name_exact_match": vic_exact,
+        "victim_name_f1": vic_f1,
+        "reporter_name_exact_match": rep_exact,
+        "reporter_name_f1": rep_f1,
         "phone_exact_match": res_a["phone_exact_match"],
         "phone_f1": res_a["phone_f1"],
         "map_url_exact_match": res_a["map_url_exact_match"],
@@ -376,6 +478,11 @@ def execute_task2_pipeline(
     X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
     X_test_vec = vectorizer.transform(test_df["generated_text"].values)
     print(f"--- [Task 2] TF-IDF Matrix ready: train={X_train_vec.shape}, test={X_test_vec.shape} ---")
+
+    # Pre-compute Token Feature Matrix once for all ML Token Classifiers
+    print("--- [Task 2] Pre-computing Token Matrices once for all Token Classifiers ---")
+    token_cache = prepare_task2_token_cache(train_df, test_df)
+    print(f"--- [Task 2] Token Matrix ready: train={token_cache['X_train_mat'].shape}, test={token_cache['X_test_mat'].shape} ---")
 
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")
@@ -444,7 +551,7 @@ def execute_task2_pipeline(
         if not should_skip(app_b1_name):
             print(f"--- Task 2 Running: {app_b1_name} ---")
             try:
-                res_b1 = run_task2_approach_b1_binned(train_df, test_df, clf_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                res_b1, _ = run_task2_approach_b1_binned(train_df, test_df, clf_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
                 results.append(res_b1)
                 pd.DataFrame(results).to_csv(task2_csv, index=False)
                 notify_step(res_b1)
@@ -474,7 +581,7 @@ def execute_task2_pipeline(
         if not should_skip(app_b2_name):
             print(f"--- Task 2 Running: {app_b2_name} ---")
             try:
-                res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                res_b2, y_t, y_p, _ = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
                 results.append(res_b2)
                 reg_predictions[r_name] = y_p
                 y_true_all = y_t
@@ -483,20 +590,52 @@ def execute_task2_pipeline(
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b2_name}: {e}")
         
-    # 4. Approach B3 (CRF Sequence Tagger)
-    app_b3_name = "Approach B3 (CRF Sequence Tagger)"
-    crf_pred_locs = None
-    if not should_skip(app_b3_name):
-        print(f"--- Task 2 Running: {app_b3_name} ---")
-        try:
-            res_b3, crf_pred_locs = run_task2_approach_b3_crf(train_df, test_df)
-            results.append(res_b3)
-            pd.DataFrame(results).to_csv(task2_csv, index=False)
-            notify_step(res_b3)
-        except Exception as e:
-            print(f"Warning: Failed to evaluate {app_b3_name}: {e}")
+    # 4. Approach B3 (Token Sequence Taggers Benchmark across all models)
+    if selected_models:
+        b3_models = []
+        for m in selected_models:
+            if m in ("CRF", "BiLSTM-CRF", "BiLSTM"):
+                b3_models.append(m)
+            elif m in ALL_CLASSIFIER_NAMES or m == "DummyClassifier":
+                b3_models.append(m)
+            elif f"{m}Classifier" in ALL_CLASSIFIER_NAMES:
+                b3_models.append(f"{m}Classifier")
+            elif m.replace("Regressor", "Classifier") in ALL_CLASSIFIER_NAMES:
+                b3_models.append(m.replace("Regressor", "Classifier"))
+            else:
+                b3_models.append(m)
+    else:
+        b3_models = ["CRF", "BiLSTM-CRF"] + ALL_CLASSIFIER_NAMES
+
+    best_b3_entities = None
+    best_b3_score = -1.0
+    best_b3_name = "CRF"
+
+    for t_name in b3_models:
+        app_b3_name = f"Approach B3 (Token Tagger {t_name})"
+        if not should_skip(app_b3_name):
+            print(f"--- Task 2 Running: {app_b3_name} ---")
+            try:
+                res_b3, pred_ents = run_task2_approach_b3_token_tagger(train_df, test_df, model_name=t_name, use_gpu=use_gpu)
+                results.append(res_b3)
+                pd.DataFrame(results).to_csv(task2_csv, index=False)
+                notify_step(res_b3)
+
+                score = float(res_b3.get("location_exact_match", 0.0)) + float(res_b3.get("location_f1", 0.0))
+                if score > best_b3_score:
+                    best_b3_score = score
+                    best_b3_entities = pred_ents
+                    best_b3_name = t_name
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {app_b3_name}: {e}")
+        else:
+            # Check completed step
+            score = float(completed_map[app_b3_name].get("location_exact_match", 0.0)) + float(completed_map[app_b3_name].get("location_f1", 0.0))
+            if score > best_b3_score:
+                best_b3_score = score
+                best_b3_name = t_name
     
-    # 5. Approach C (Hybrid System) - Dynamically select best regressor from Approach B2
+    # 5. Approach C (Hybrid System) - Dynamically select best regressor from Approach B2 and best token tagger from Approach B3
     best_reg_name = "XGBRegressor"
     min_mae = float("inf")
     for r in results:
@@ -507,14 +646,16 @@ def execute_task2_pipeline(
                 min_mae = cand_mae
                 best_reg_name = app_title.replace("Approach B2 (Regressor ", "").rstrip(")")
                 
-    app_c_name = f"Approach C (Hybrid Rules + ML CRF + {best_reg_name}) [Best Hybrid]"
+    app_c_name = f"Approach C (Hybrid Rules + ML {best_b3_name} + {best_reg_name}) [Best Hybrid]"
     if not should_skip(app_c_name):
         print(f"--- Task 2 Running: {app_c_name} ---")
         try:
             res_c = run_task2_approach_c_hybrid(
-                train_df, test_df, best_regressor_name=best_reg_name,
+                train_df, test_df,
+                best_regressor_name=best_reg_name,
+                best_token_model_name=best_b3_name,
                 use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
-                crf_pred_locs=crf_pred_locs
+                best_pred_entities=best_b3_entities
             )
             results.append(res_c)
             pd.DataFrame(results).to_csv(task2_csv, index=False)

@@ -7,6 +7,7 @@ NER Tagger Suite implementing:
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 from typing import List, Dict, Tuple, Any, Optional
 
 try:
@@ -182,7 +183,7 @@ class ThaiLocationCRFTagger:
 
 class ThaiMultiNER_CRFTagger:
     """
-    Pure Machine Learning Multi-Entity Sequence Tagger for Location, Phone, Map URL, and Coordinates.
+    Pure Machine Learning Multi-Entity Sequence Tagger for Location, Phone, Map URL, Coordinates, Victim Name, and Reporter Name.
     Uses sklearn-crfsuite CRF trained on token-aligned annotations without any regex rules.
     """
     def __init__(self, c1: float = 0.01, c2: float = 0.01, max_iterations: int = 60):
@@ -198,7 +199,8 @@ class ThaiMultiNER_CRFTagger:
 
     def _extract_multi_entity_bio(
         self, text: str, loc_str: Optional[str], phone_str: Optional[str],
-        url_str: Optional[str], lat: Optional[Any], lng: Optional[Any]
+        url_str: Optional[str], lat: Optional[Any], lng: Optional[Any],
+        vic_name: Optional[str] = None, rep_name: Optional[str] = None
     ) -> Tuple[List[str], List[Tuple[int, int]], List[str]]:
         text_str = str(text or "")
         tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
@@ -213,6 +215,8 @@ class ThaiMultiNER_CRFTagger:
             spans.append((s, e))
             
         entities = [
+            ("VIC_NAME", str(vic_name or "").strip()),
+            ("REP_NAME", str(rep_name or "").strip()),
             ("LOC", str(loc_str or "").strip()),
             ("PHONE", str(phone_str or "").strip()),
             ("URL", str(url_str or "").strip()),
@@ -249,6 +253,7 @@ class ThaiMultiNER_CRFTagger:
             "is_dist": any(w.startswith(p) for p in ["อ.", "อำเภอ", "เขต"]),
             "is_subdist": any(w.startswith(p) for p in ["ต.", "ตำบล", "แขวง"]),
             "is_land": any(w.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"]),
+            "is_title": any(w.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย"]),
             "is_url": "http" in w or "maps" in w or "goo.gl" in w,
             "has_dot": "." in w,
             "is_phone_len": w.isdigit() and len(w) in (3, 4, 9, 10)
@@ -262,6 +267,7 @@ class ThaiMultiNER_CRFTagger:
                 feat[f"{prefix}is_dist"] = any(nw.startswith(p) for p in ["อ.", "อำเภอ", "เขต"])
                 feat[f"{prefix}is_subdist"] = any(nw.startswith(p) for p in ["ต.", "ตำบล", "แขวง"])
                 feat[f"{prefix}is_land"] = any(nw.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
+                feat[f"{prefix}is_title"] = any(nw.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย"])
                 feat[f"{prefix}is_url"] = "http" in nw or "maps" in nw or "goo.gl" in nw
                 feat[f"{prefix}has_dot"] = "." in nw
         if i == 0:
@@ -270,12 +276,14 @@ class ThaiMultiNER_CRFTagger:
             feat["EOS"] = True
         return feat
 
-    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any]):
+    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
         """Trains multi-entity CRF sequence tagger."""
         X_feats = []
         y_tags = []
-        for text, loc, phone, url, lat, lng in zip(texts, locs, phones, urls, lats, lngs):
-            tokens, spans, tags = self._extract_multi_entity_bio(text, loc, phone, url, lat, lng)
+        v_names = vic_names if vic_names is not None else [None] * len(texts)
+        r_names = rep_names if rep_names is not None else [None] * len(texts)
+        for text, loc, phone, url, lat, lng, vn, rn in zip(texts, locs, phones, urls, lats, lngs, v_names, r_names):
+            tokens, spans, tags = self._extract_multi_entity_bio(text, loc, phone, url, lat, lng, vn, rn)
             feats = [self._token2features(tokens, i) for i in range(len(tokens))]
             X_feats.append(feats)
             y_tags.append(tags)
@@ -283,8 +291,9 @@ class ThaiMultiNER_CRFTagger:
         return self
 
     def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
-        """Predicts extracted spans for Location, Phone, Map URL, and Coordinates purely via ML."""
+        """Predicts extracted spans for Location, Phone, Map URL, Coordinates, Victim Name, and Reporter Name."""
         pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
         for text in texts:
             text_str = str(text or "")
             tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
@@ -293,6 +302,8 @@ class ThaiMultiNER_CRFTagger:
                 pred_phones.append("")
                 pred_urls.append("")
                 pred_coords.append("")
+                pred_vic_names.append("")
+                pred_rep_names.append("")
                 continue
             feats = [self._token2features(tokens, i) for i in range(len(tokens))]
             preds = self.crf.predict_single(feats)
@@ -320,12 +331,16 @@ class ThaiMultiNER_CRFTagger:
             pred_phones.append(extract_span("PHONE"))
             pred_urls.append(extract_span("URL"))
             pred_coords.append(extract_span("COORDS"))
+            pred_vic_names.append(extract_span("VIC_NAME"))
+            pred_rep_names.append(extract_span("REP_NAME"))
             
         return {
             "locations": pred_locs,
             "phones": pred_phones,
             "urls": pred_urls,
-            "coords": pred_coords
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
         }
 
 
@@ -457,4 +472,322 @@ class BiLSTM_CRF_PyTorch(nn.Module):
             lstm_out, _ = self.lstm(embeds)
             pooled = torch.mean(lstm_out, dim=1).squeeze(0)
             return pooled.cpu().numpy()
+
+
+from sklearn.feature_extraction import DictVectorizer
+from src.models.classifiers import get_classifier
+
+
+class SlidingWindowTokenClassifier:
+    """
+    Token Sequence Classification using any Task 1 Classifier (LogisticRegression, SVM, RF, XGB, CatBoost, etc.)
+    with a Sliding Context Window (-2, -1, 0, +1, +2) across words.
+    """
+    def __init__(self, model_name: str = "LogisticRegression", use_gpu: bool = True):
+        self.model_name = model_name
+        self.use_gpu = use_gpu
+        self.vectorizer = DictVectorizer(sparse=True)
+        self.clf = get_classifier(model_name, use_gpu=use_gpu)
+        self.multi_ner_helper = ThaiMultiNER_CRFTagger()
+
+    def fit_and_predict_cached(self, token_cache: Dict[str, Any]) -> Dict[str, List[str]]:
+        """Fast 0.1s fitting and predicting using pre-computed token matrices."""
+        self.clf.fit(token_cache["X_train_mat"], token_cache["y_train_labels"])
+        all_preds = self.clf.predict(token_cache["X_test_mat"])
+        
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
+        
+        for t_str, tokens, spans, s_i, e_i in token_cache["test_meta"]:
+            if not tokens or s_i == e_i:
+                pred_locs.append("")
+                pred_phones.append("")
+                pred_urls.append("")
+                pred_coords.append("")
+                pred_vic_names.append("")
+                pred_rep_names.append("")
+                continue
+            preds = all_preds[s_i:e_i]
+            
+            def extract_span(target_type: str) -> str:
+                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
+                if target_type == "LOC":
+                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                        idx.pop(0)
+                if idx:
+                    s_c = spans[idx[0]][0]
+                    e_c = spans[idx[-1]][1]
+                    return t_str[s_c:e_c].strip()
+                return ""
+                
+            pred_locs.append(extract_span("LOC"))
+            pred_phones.append(extract_span("PHONE"))
+            pred_urls.append(extract_span("URL"))
+            pred_coords.append(extract_span("COORDS"))
+            pred_vic_names.append(extract_span("VIC_NAME"))
+            pred_rep_names.append(extract_span("REP_NAME"))
+            
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
+        }
+
+    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
+        """Trains sliding window token classifier on token-level BIO labels."""
+        X_token_dicts = []
+        y_token_labels = []
+        v_names = vic_names if vic_names is not None else [None] * len(texts)
+        r_names = rep_names if rep_names is not None else [None] * len(texts)
+        for text, loc, phone, url, lat, lng, vn, rn in zip(texts, locs, phones, urls, lats, lngs, v_names, r_names):
+            tokens, spans, tags = self.multi_ner_helper._extract_multi_entity_bio(text, loc, phone, url, lat, lng, vn, rn)
+            for i in range(len(tokens)):
+                feat = self.multi_ner_helper._token2features(tokens, i)
+                X_token_dicts.append(feat)
+                y_token_labels.append(tags[i])
+                
+        if X_token_dicts:
+            X_mat = self.vectorizer.fit_transform(X_token_dicts)
+            self.clf.fit(X_mat, y_token_labels)
+        return self
+
+    def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
+        """Predicts token-level BIO labels and decodes into entity spans."""
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
+        for text in texts:
+            text_str = str(text or "")
+            tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+            if not tokens:
+                pred_locs.append("")
+                pred_phones.append("")
+                pred_urls.append("")
+                pred_coords.append("")
+                pred_vic_names.append("")
+                pred_rep_names.append("")
+                continue
+            feats = [self.multi_ner_helper._token2features(tokens, i) for i in range(len(tokens))]
+            X_mat = self.vectorizer.transform(feats)
+            preds = self.clf.predict(X_mat)
+            
+            cur = 0
+            spans = []
+            for tok in tokens:
+                s = cur
+                e = cur + len(tok)
+                cur = e
+                spans.append((s, e))
+                
+            def extract_span(target_type: str) -> str:
+                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
+                if target_type == "LOC":
+                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                        idx.pop(0)
+                if idx:
+                    s_c = spans[idx[0]][0]
+                    e_c = spans[idx[-1]][1]
+                    return text_str[s_c:e_c].strip()
+                return ""
+                
+            pred_locs.append(extract_span("LOC"))
+            pred_phones.append(extract_span("PHONE"))
+            pred_urls.append(extract_span("URL"))
+            pred_coords.append(extract_span("COORDS"))
+            pred_vic_names.append(extract_span("VIC_NAME"))
+            pred_rep_names.append(extract_span("REP_NAME"))
+            
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
+        }
+
+
+def prepare_task2_token_cache(train_df: pd.DataFrame, test_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Pre-computes sliding window token feature matrices and test token spans ONCE for all classifiers in Task 2.
+    Accelerates the entire 17-model benchmark by ~20x.
+    """
+    helper = ThaiMultiNER_CRFTagger()
+    vectorizer = DictVectorizer(sparse=True)
+    
+    # 1. Train tokens
+    train_texts = train_df["generated_text"].tolist()
+    locs = [str(x or "").strip() if pd.notna(x) else "" for x in train_df.get("gt_location_name", [])]
+    phones = [str(x or "").strip() if pd.notna(x) else "" for x in train_df.get("gt_victim_phone", [])]
+    urls = [str(x or "").strip() if pd.notna(x) else "" for x in train_df.get("gt_google_map_url", [])]
+    lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
+    lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
+    vn = [str(x or "").strip() if pd.notna(x) else "" for x in train_df.get("gt_victim_name", [])]
+    rn = [str(x or "").strip() if pd.notna(x) else "" for x in train_df.get("gt_reporter_name", [])]
+    
+    X_train_dicts = []
+    y_train_labels = []
+    for t, l, p, u, la, ln, v, r in zip(train_texts, locs, phones, urls, lats, lngs, vn, rn):
+        tokens, spans, tags = helper._extract_multi_entity_bio(t, l, p, u, la, ln, v, r)
+        for i in range(len(tokens)):
+            X_train_dicts.append(helper._token2features(tokens, i))
+            y_train_labels.append(tags[i])
+            
+    X_train_mat = vectorizer.fit_transform(X_train_dicts)
+    
+    # 2. Test tokens & metadata
+    test_texts = test_df["generated_text"].tolist()
+    test_meta = []
+    X_test_dicts = []
+    for t in test_texts:
+        t_str = str(t or "")
+        tokens = word_tokenize(t_str, engine="newmm", keep_whitespace=True)
+        cur = 0
+        spans = []
+        for tok in tokens:
+            s = cur
+            e = cur + len(tok)
+            cur = e
+            spans.append((s, e))
+        start_idx = len(X_test_dicts)
+        for i in range(len(tokens)):
+            X_test_dicts.append(helper._token2features(tokens, i))
+        end_idx = len(X_test_dicts)
+        test_meta.append((t_str, tokens, spans, start_idx, end_idx))
+        
+    X_test_mat = vectorizer.transform(X_test_dicts)
+    
+    return {
+        "vectorizer": vectorizer,
+        "X_train_mat": X_train_mat,
+        "y_train_labels": y_train_labels,
+        "X_test_mat": X_test_mat,
+        "test_meta": test_meta
+    }
+
+
+class BiLSTM_CRF_Tagger:
+    """
+    PyTorch GPU-accelerated BiLSTM-CRF Multi-Entity Sequence Tagger.
+    """
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 8, lr: float = 0.01, use_gpu: bool = True):
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.epochs = epochs
+        self.lr = lr
+        self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+        self.multi_ner_helper = ThaiMultiNER_CRFTagger()
+        self.word_to_ix: Dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
+        self.tag_to_ix: Dict[str, int] = {"<START>": 0, "<STOP>": 1, "O": 2}
+        self.model: Optional[BiLSTM_CRF_PyTorch] = None
+
+    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
+        """Trains BiLSTM-CRF model on GPU CUDA."""
+        tokenized_sents = []
+        tagged_sents = []
+        v_names = vic_names if vic_names is not None else [None] * len(texts)
+        r_names = rep_names if rep_names is not None else [None] * len(texts)
+        for text, loc, phone, url, lat, lng, vn, rn in zip(texts, locs, phones, urls, lats, lngs, v_names, r_names):
+            tokens, spans, tags = self.multi_ner_helper._extract_multi_entity_bio(text, loc, phone, url, lat, lng, vn, rn)
+            tokenized_sents.append(tokens)
+            tagged_sents.append(tags)
+            for w in tokens:
+                w_str = w.strip()
+                if w_str and w_str not in self.word_to_ix:
+                    self.word_to_ix[w_str] = len(self.word_to_ix)
+            for t in tags:
+                if t not in self.tag_to_ix:
+                    self.tag_to_ix[t] = len(self.tag_to_ix)
+                    
+        self.model = BiLSTM_CRF_PyTorch(
+            vocab_size=len(self.word_to_ix),
+            tag_to_ix=self.tag_to_ix,
+            embedding_dim=self.embedding_dim,
+            hidden_dim=self.hidden_dim
+        ).to(self.device)
+        
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        
+        # Train loop
+        self.model.train()
+        for epoch in range(self.epochs):
+            for tokens, tags in zip(tokenized_sents, tagged_sents):
+                if not tokens:
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                tag_idxs = [self.tag_to_ix[t] for t in tags]
+                
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                
+                self.model.zero_grad()
+                loss = self.model.loss(seq_in, seq_targets)
+                loss.backward()
+                optimizer.step()
+                
+        return self
+
+    def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
+        """Performs Viterbi decoding with BiLSTM-CRF on GPU and decodes entity spans."""
+        if self.model is None:
+            return {"locations": [""] * len(texts), "phones": [""] * len(texts), "urls": [""] * len(texts), "coords": [""] * len(texts), "victim_names": [""] * len(texts), "reporter_names": [""] * len(texts)}
+            
+        self.model.eval()
+        ix_to_tag = {v: k for k, v in self.tag_to_ix.items()}
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
+        
+        with torch.no_grad():
+            for text in texts:
+                text_str = str(text or "")
+                tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+                if not tokens:
+                    pred_locs.append("")
+                    pred_phones.append("")
+                    pred_urls.append("")
+                    pred_coords.append("")
+                    pred_vic_names.append("")
+                    pred_rep_names.append("")
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                _, tag_seq = self.model(seq_in)
+                preds = [ix_to_tag.get(idx, "O") for idx in tag_seq]
+                
+                cur = 0
+                spans = []
+                for tok in tokens:
+                    s = cur
+                    e = cur + len(tok)
+                    cur = e
+                    spans.append((s, e))
+                    
+                def extract_span(target_type: str) -> str:
+                    idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
+                    if target_type == "LOC":
+                        while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                            idx.pop(0)
+                    if idx:
+                        s_c = spans[idx[0]][0]
+                        e_c = spans[idx[-1]][1]
+                        return text_str[s_c:e_c].strip()
+                    return ""
+                    
+                pred_locs.append(extract_span("LOC"))
+                pred_phones.append(extract_span("PHONE"))
+                pred_urls.append(extract_span("URL"))
+                pred_coords.append(extract_span("COORDS"))
+                pred_vic_names.append(extract_span("VIC_NAME"))
+                pred_rep_names.append(extract_span("REP_NAME"))
+                
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
+        }
 
