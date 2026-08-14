@@ -37,7 +37,7 @@ def plot_02_model_performance_comparison(df_metrics: pd.DataFrame, output_path: 
     model_col = "approach" if "approach" in df_metrics.columns else ("model" if "model" in df_metrics.columns else None)
     metrics_to_plot = [
         c for c in ["f1", "f2", "precision", "recall", "accuracy", "mcc",
-                    "phone_exact_match", "location_exact_match", "count_exact_match", "mean_count_mae"]
+                    "phone_exact_match", "location_exact_match", "count_exact_match"]
         if c in df_metrics.columns
     ]
     
@@ -52,6 +52,46 @@ def plot_02_model_performance_comparison(df_metrics: pd.DataFrame, output_path: 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         plt.savefig(output_path, dpi=300)
     plt.close()
+
+
+def plot_task2_extraction_comparison(df_metrics: pd.DataFrame, graphs_dir: str):
+    """Generates dedicated Task 2 plots: (1) F1/F2/Exact Match Scores, (2) Count MAE & RMSE Errors."""
+    model_col = "approach" if "approach" in df_metrics.columns else ("model" if "model" in df_metrics.columns else None)
+    if not model_col:
+        return
+        
+    os.makedirs(graphs_dir, exist_ok=True)
+    
+    # 1. Scores Comparison (F1, F2, Phone Match, Location Match, Count Exact Match) - Higher is better
+    score_cols = [c for c in ["f1", "f2", "count_exact_match", "phone_exact_match", "location_exact_match"] if c in df_metrics.columns]
+    if score_cols:
+        fig, ax = plt.subplots(figsize=(11, 6))
+        melted = df_metrics.melt(id_vars=[model_col], value_vars=score_cols, var_name="Metric", value_name="Score")
+        sns.barplot(data=melted, x=model_col, y="Score", hue="Metric", ax=ax, palette="Set2")
+        ax.set_title("Task 2 Extraction: F1/F2 & Accuracy Scores (Higher is Better)", fontsize=12, fontweight="bold")
+        ax.tick_params(axis="x", rotation=30)
+        plt.xticks(ha="right")
+        ax.set_ylim(0.0, 1.05)
+        ax.set_xlabel("Approach / Model")
+        ax.set_ylabel("Score (0.0 - 1.0)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(graphs_dir, "02_task2_extraction_scores_comparison.png"), dpi=300)
+        plt.close()
+        
+    # 2. Error Metrics Comparison (Count MAE, Count RMSE) - Lower is better
+    err_cols = [c for c in ["mean_count_mae", "mean_count_rmse"] if c in df_metrics.columns]
+    if err_cols:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        melted_err = df_metrics.melt(id_vars=[model_col], value_vars=err_cols, var_name="Error Metric", value_name="Error Value")
+        sns.barplot(data=melted_err, x=model_col, y="Error Value", hue="Error Metric", ax=ax, palette="Reds")
+        ax.set_title("Task 2 Extraction: Count Error Rates (MAE & RMSE - Lower is Better)", fontsize=12, fontweight="bold")
+        ax.tick_params(axis="x", rotation=30)
+        plt.xticks(ha="right")
+        ax.set_xlabel("Approach / Model")
+        ax.set_ylabel("Error Value (Count Difference)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(graphs_dir, "02_task2_extraction_error_mae_rmse.png"), dpi=300)
+        plt.close()
 
 
 def plot_03_f1_f2_vs_latency_tradeoff(df_tradeoff: pd.DataFrame, output_path: str):

@@ -22,7 +22,7 @@ from src.utils.metrics import (
     compute_classification_metrics
 )
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
-from src.utils.visualization import plot_02_model_performance_comparison
+from src.utils.visualization import plot_02_model_performance_comparison, plot_task2_extraction_comparison
 
 
 def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
@@ -342,6 +342,10 @@ def execute_task2_pipeline(
         summary_df,
         os.path.join(output_dir, "graphs", "02_task2_extraction_comparison.png"),
         task_name="Task 2 Extraction"
+    )
+    plot_task2_extraction_comparison(
+        summary_df,
+        os.path.join(output_dir, "graphs")
     )
     
     if notifier:
