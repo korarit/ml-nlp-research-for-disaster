@@ -7,16 +7,18 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from typing import Tuple, Dict, List, Any
+from typing import Tuple, Dict, List, Any, Optional
 
 # Train dataset
-DEFAULT_TRAIN_PATH = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset_v2.csv"
-# Test dataset
-DEFAULT_TEST_PATH = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
+DEFAULT_TRAIN_PATH = "dataset/merged_synthetic_ner_dataset_v2.csv"
+# Test datasets (Round 1 & Round 2)
+DEFAULT_TEST_PATH_1 = "dataset/gemini_3-1_flash_lite_synthetic_ner_dataset.csv"
+DEFAULT_TEST_PATH_2 = "dataset/gpt_5_6_luna_paired_synthetic_ner_dataset.csv"
 
 # Legacy aliases for backwards compatibility
+DEFAULT_TEST_PATH = DEFAULT_TEST_PATH_1
 DEFAULT_GEMINI_PATH = DEFAULT_TRAIN_PATH
-DEFAULT_LUNA_PATH = DEFAULT_TEST_PATH
+DEFAULT_LUNA_PATH = DEFAULT_TEST_PATH_1
 
 COUNT_COLUMNS = [
     "gt_dead", "gt_critical", "gt_urgent", "gt_safe",
@@ -25,8 +27,10 @@ COUNT_COLUMNS = [
 ]
 
 
-def load_dataset(filepath: str) -> pd.DataFrame:
-    """Loads CSV dataset with UTF-8 encoding and fills standard NaNs."""
+def load_dataset(filepath: Optional[str]) -> Optional[pd.DataFrame]:
+    """Loads CSV dataset with UTF-8 encoding and fills standard NaNs. Returns None if filepath is None."""
+    if not filepath or str(filepath).lower() in ("none", "null", ""):
+        return None
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Dataset file not found at: {filepath}")
     df = pd.read_csv(filepath, encoding="utf-8")
@@ -47,26 +51,53 @@ def load_dataset(filepath: str) -> pd.DataFrame:
 
 def load_train_test_datasets(
     train_path: str = DEFAULT_TRAIN_PATH,
-    test_path: str = DEFAULT_TEST_PATH,
+    test_path: Optional[str] = DEFAULT_TEST_PATH_1,
+    test_path_1: Optional[str] = None,
+    test_path_2: Optional[str] = None,
     **kwargs
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Loads both Training dataset and Held-out Test dataset."""
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+    """Loads Training dataset and Held-out Test dataset. Returns (train_df, test_df)."""
     if "gemini_path" in kwargs:
         train_path = kwargs["gemini_path"]
     if "luna_path" in kwargs:
         test_path = kwargs["luna_path"]
+    if test_path is None and test_path_1 is not None:
+        test_path = test_path_1
     train_df = load_dataset(train_path)
-    test_df = load_dataset(test_path)
+    test_df = load_dataset(test_path) if test_path else None
     return train_df, test_df
 
 
 def load_all_datasets(
     train_path: str = DEFAULT_TRAIN_PATH,
-    test_path: str = DEFAULT_TEST_PATH,
+    test_path: Optional[str] = DEFAULT_TEST_PATH_1,
     **kwargs
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """Loads training and test datasets. (Alias for load_train_test_datasets)."""
     return load_train_test_datasets(train_path=train_path, test_path=test_path, **kwargs)
+
+
+def load_all_test_datasets(
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path_1: Optional[str] = DEFAULT_TEST_PATH_1,
+    test_path_2: Optional[str] = DEFAULT_TEST_PATH_2,
+    **kwargs
+) -> Dict[str, Tuple[pd.DataFrame, Optional[pd.DataFrame]]]:
+    """
+    Loads training dataset and returns dictionary of evaluation rounds:
+    {
+        'test_1': (train_df, test_df_1), # if test_path_1 is provided
+        'test_2': (train_df, test_df_2)  # if test_path_2 is provided
+    }
+    Either test_path_1 or test_path_2 can be None / "none" to auto-skip that round.
+    """
+    train_df = load_dataset(train_path)
+    res = {}
+    if test_path_1 and str(test_path_1).lower() not in ("none", "null", ""):
+        res["test_1"] = (train_df, load_dataset(test_path_1))
+    if test_path_2 and str(test_path_2).lower() not in ("none", "null", ""):
+        res["test_2"] = (train_df, load_dataset(test_path_2))
+    return res
 
 
 def bin_count_target(y_counts: np.ndarray) -> np.ndarray:

@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 
-from src.utils.data_loader import load_all_datasets, extract_triage_data_by_age
+from src.utils.data_loader import load_all_datasets, extract_triage_data_by_age, DEFAULT_TRAIN_PATH, DEFAULT_TEST_PATH
 from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.rules_engine import PediatricIITTRules, AdultIITTRules, ClauseSplitterRules
@@ -23,40 +23,41 @@ from src.utils.statistical_tests import run_pairwise_model_stat_tests
 
 def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Evaluates Sub-task 3.1: People Extraction (Extracting individual victims & symptoms).
-    Method 3.1a: Rule-based Clause Splitter
-    Method 3.1b: BiLSTM-CRF Extractor
+    Subtask 3.1: Rules-based People Entity & Symptom Literal Extraction benchmark.
     """
     splitter = ClauseSplitterRules()
-    texts = test_df["generated_text"].tolist()
+    exact_symptom_matches = 0
+    total_victims = 0
     
-    extracted_counts = [len(splitter.extract_victims(t)) for t in texts]
-    mean_extracted_victims = float(np.mean(extracted_counts))
-    
+    for _, row in test_df.iterrows():
+        text = row.get("generated_text", "")
+        extracted_clauses = splitter.extract_clauses(text)
+        victims = extract_triage_data_by_age(pd.DataFrame([row]))[0]  # pediatric check
+        victims_adult = extract_triage_data_by_age(pd.DataFrame([row]))[1]
+        
+        all_vic = pd.concat([victims, victims_adult], ignore_index=True)
+        for _, vic in all_vic.iterrows():
+            total_victims += 1
+            gt_sym = vic.get("symptoms_literal", "").strip().lower()
+            if any(gt_sym in cl.lower() for cl in extracted_clauses):
+                exact_symptom_matches += 1
+                
+    acc = (exact_symptom_matches / total_victims) if total_victims > 0 else 1.0
     return {
-        "task": "People Extraction (3.1)",
-        "model": "Method 3.1a (Rule-based Clause Splitter)",
-        "mean_extracted_victims_per_tweet": mean_extracted_victims,
-        "f1_weighted": 0.88,
-        "critical_under_triage_rate": 0.0
+        "model": "ClauseSplitterRules",
+        "task_sub": "3.1_people_extraction",
+        "symptom_extraction_accuracy": acc,
+        "total_victims_evaluated": total_victims
     }
 
 
 def run_triage_cv_and_test(
-    train_triage_df: pd.DataFrame,
-    test_triage_df: pd.DataFrame,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     model_name: str,
-    is_pediatric: bool = False,
+    is_pediatric: bool = True,
     use_gpu: bool = True
 ) -> Tuple[Dict[str, Any], np.ndarray]:
-    """Runs 5-Fold Stratified CV on Training Triage set and tests on Held-out Test Triage set."""
-    feature_col = "text" if "text" in train_triage_df.columns else "symptoms_literal"
-    X_tr = train_triage_df[feature_col].values
-    y_tr = train_triage_df["triage_color"].values
-    
-    X_te = test_triage_df[feature_col].values
-    y_te = test_triage_df["triage_color"].values
-    
     if len(y_tr) < 10 or len(y_te) < 10:
         return {"model": model_name, "f1_weighted": 0.0, "critical_under_triage_rate": 0.0}, np.array([])
         
@@ -86,10 +87,12 @@ def execute_task3_pipeline(
     use_gpu: bool = True,
     selected_classifiers: List[str] = None,
     force: bool = False,
-    notifier: Optional[Any] = None
+    notifier: Optional[Any] = None,
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH
 ) -> pd.DataFrame:
     """Executes full Task 3 Clinical Triage Pipeline with incremental auto-checkpointing and auto-skip support."""
-    train_df, test_df = load_all_datasets()
+    train_df, test_df = load_all_datasets(train_path=train_path, test_path=test_path)
     
     train_pedia, train_adult = extract_triage_data_by_age(train_df)
     test_pedia, test_adult = extract_triage_data_by_age(test_df)

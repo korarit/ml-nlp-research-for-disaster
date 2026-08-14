@@ -12,7 +12,7 @@ import pandas as pd
 from typing import Dict, List, Any, Optional
 from sklearn.pipeline import Pipeline
 
-from src.utils.data_loader import load_all_datasets, extract_triage_data_by_age
+from src.utils.data_loader import load_all_datasets, extract_triage_data_by_age, DEFAULT_TRAIN_PATH, DEFAULT_TEST_PATH
 from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier
 from src.models.regressors import get_regressor
@@ -155,10 +155,12 @@ def execute_task4_e2e_pipeline(
     use_gpu: bool = True,
     latency_runs: int = 1000,
     force: bool = False,
-    notifier: Optional[Any] = None
+    notifier: Optional[Any] = None,
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH
 ) -> Dict[str, Any]:
     """Executes full Task 4 End-to-End Integrated Pipeline Benchmark on held-out test dataset with auto-skip support."""
-    train_df, test_df = load_all_datasets()
+    train_df, test_df = load_all_datasets(train_path=train_path, test_path=test_path)
     
     out_json_path = os.path.join(output_dir, "task4_e2e_results", "task4_e2e_metrics.json")
     if os.path.exists(out_json_path) and not force:

@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 
-from src.utils.data_loader import load_all_datasets
+from src.utils.data_loader import load_all_datasets, DEFAULT_TRAIN_PATH, DEFAULT_TEST_PATH
 from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.rules_engine import SimpleKeywordRules
@@ -157,10 +157,12 @@ def execute_task1_pipeline(
     n_splits: int = 5,
     latency_runs: int = 1000,
     force: bool = False,
-    notifier: Optional[Any] = None
+    notifier: Optional[Any] = None,
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH
 ) -> pd.DataFrame:
     """Executes full Task 1 Pipeline with incremental auto-checkpointing and auto-skip support."""
-    train_df, test_df = load_all_datasets()
+    train_df, test_df = load_all_datasets(train_path=train_path, test_path=test_path)
     models_to_run = selected_models or (["SimpleKeywordRules"] + ALL_CLASSIFIER_NAMES)
     
     summary_results = []

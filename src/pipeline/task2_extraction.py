@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
 
-from src.utils.data_loader import load_all_datasets, bin_count_target, COUNT_COLUMNS
+from src.utils.data_loader import load_all_datasets, bin_count_target, COUNT_COLUMNS, DEFAULT_TRAIN_PATH, DEFAULT_TEST_PATH
 from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.regressors import get_regressor, ALL_REGRESSOR_NAMES
@@ -173,10 +173,12 @@ def execute_task2_pipeline(
     use_gpu: bool = True,
     selected_regressors: List[str] = None,
     force: bool = False,
-    notifier: Optional[Any] = None
+    notifier: Optional[Any] = None,
+    train_path: str = DEFAULT_TRAIN_PATH,
+    test_path: str = DEFAULT_TEST_PATH
 ) -> pd.DataFrame:
     """Executes full Task 2 Extraction Pipeline with incremental auto-checkpointing and auto-skip support."""
-    train_df, test_df = load_all_datasets()
+    train_df, test_df = load_all_datasets(train_path=train_path, test_path=test_path)
     os.makedirs(os.path.join(output_dir, "stat_tests"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     
