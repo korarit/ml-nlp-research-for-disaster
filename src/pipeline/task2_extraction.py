@@ -113,6 +113,9 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
+from src.models.ner_crf import ThaiLocationCRFTagger, ThaiMultiNER_CRFTagger
+
+
 def run_task2_approach_b1_binned(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
@@ -121,28 +124,10 @@ def run_task2_approach_b1_binned(
     X_train_vec: Optional[Any] = None,
     X_test_vec: Optional[Any] = None
 ) -> Dict[str, Any]:
-    """Evaluates Approach B1 Binned Categorical Classification (0, 1, 2, 3+) across count fields."""
-    engine = ExtractionRulesEngine()
-    texts = test_df["generated_text"].tolist()
-    
-    # Phone, Map URL, Location, and Coords match (via Rules engine)
-    true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
-    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
-    phone_m = compute_string_match_metrics(true_phones, pred_phones)
-    
-    true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
-    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
-    url_m = compute_string_match_metrics(true_urls, pred_urls)
-    
-    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
-    loc_m = compute_string_match_metrics(true_locs, pred_locs)
-
-    true_coord_strs = extract_gt_coords_vector(test_df)
-    pred_coords = [engine.extract_coords(t) for t in texts]
-    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
-    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
-
+    """
+    Evaluates Approach B1: Pure ML Binned Categorical Classification (0, 1, 2, 3+) across count fields.
+    Does NOT use Rule-based engine for any field.
+    """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
         X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
@@ -180,14 +165,14 @@ def run_task2_approach_b1_binned(
         "approach": f"Approach B1 (Binned {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": phone_m["gt_match_rate"],
-        "phone_f1": phone_m["f1"],
-        "map_url_exact_match": url_m["gt_match_rate"],
-        "map_url_f1": url_m["f1"],
-        "coords_exact_match": coords_m["gt_match_rate"],
-        "coords_f1": coords_m["f1"],
-        "location_exact_match": loc_m["gt_match_rate"],
-        "location_f1": loc_m["f1"],
+        "phone_exact_match": 0.0,
+        "phone_f1": 0.0,
+        "map_url_exact_match": 0.0,
+        "map_url_f1": 0.0,
+        "coords_exact_match": 0.0,
+        "coords_f1": 0.0,
+        "location_exact_match": 0.0,
+        "location_f1": 0.0,
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
@@ -204,28 +189,10 @@ def run_task2_approach_b2_regression(
     X_train_vec: Optional[Any] = None,
     X_test_vec: Optional[Any] = None
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
-    """Evaluates Approach B2 Continuous Numerical Regressors across count fields."""
-    engine = ExtractionRulesEngine()
-    texts = test_df["generated_text"].tolist()
-    
-    # Phone, Map URL, Location, Coords match (via Rules engine)
-    true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
-    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
-    phone_m = compute_string_match_metrics(true_phones, pred_phones)
-    
-    true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
-    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
-    url_m = compute_string_match_metrics(true_urls, pred_urls)
-    
-    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
-    loc_m = compute_string_match_metrics(true_locs, pred_locs)
-
-    true_coord_strs = extract_gt_coords_vector(test_df)
-    pred_coords = [engine.extract_coords(t) for t in texts]
-    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
-    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
-
+    """
+    Evaluates Approach B2: Pure ML Continuous Numerical Regressors across count fields.
+    Does NOT use Rule-based engine for any field.
+    """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
         X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
@@ -266,14 +233,14 @@ def run_task2_approach_b2_regression(
         "approach": f"Approach B2 (Regressor {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": phone_m["gt_match_rate"],
-        "phone_f1": phone_m["f1"],
-        "map_url_exact_match": url_m["gt_match_rate"],
-        "map_url_f1": url_m["f1"],
-        "coords_exact_match": coords_m["gt_match_rate"],
-        "coords_f1": coords_m["f1"],
-        "location_exact_match": loc_m["gt_match_rate"],
-        "location_f1": loc_m["f1"],
+        "phone_exact_match": 0.0,
+        "phone_f1": 0.0,
+        "map_url_exact_match": 0.0,
+        "map_url_f1": 0.0,
+        "coords_exact_match": 0.0,
+        "coords_f1": 0.0,
+        "location_exact_match": 0.0,
+        "location_f1": 0.0,
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
@@ -286,32 +253,39 @@ def run_task2_approach_b3_crf(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Evaluates Approach B3 Token Classification (ML-based CRF Sequence Tagger) for Location Extraction."""
-    tagger = ThaiLocationCRFTagger()
+    """
+    Evaluates Approach B3: Pure ML Token Sequence Tagging (CRF) for all Named Entities (Location, Phone, URL, Coordinates).
+    Does NOT use Rule-based engine for any field.
+    """
+    tagger = ThaiMultiNER_CRFTagger()
     train_texts = train_df["generated_text"].tolist()
     train_locs = extract_gt_entity_vector(train_df, "gt_location_name")
+    train_phones = extract_gt_entity_vector(train_df, "gt_victim_phone")
+    train_urls = extract_gt_entity_vector(train_df, "gt_google_map_url")
+    train_lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
+    train_lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
     
-    # Train CRF model on BIO-annotated location spans
-    tagger.fit(train_texts, train_locs)
+    # Train Pure ML Multi-Entity CRF model
+    tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs)
     
     test_texts = test_df["generated_text"].tolist()
-    pred_locs = tagger.predict(test_texts)
-    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
-    loc_m = compute_string_match_metrics(true_locs, pred_locs)
-
-    engine = ExtractionRulesEngine()
-    true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
-    pred_phones = [str(engine.extract_phone(t) or "") for t in test_texts]
-    phone_m = compute_string_match_metrics(true_phones, pred_phones)
-
-    true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
-    pred_urls = [str(engine.extract_map_url(t) or "") for t in test_texts]
-    url_m = compute_string_match_metrics(true_urls, pred_urls)
+    preds = tagger.predict_entities(test_texts)
     
+    # Location metrics (ML CRF)
+    true_locs = extract_gt_entity_vector(test_df, "gt_location_name")
+    loc_m = compute_string_match_metrics(true_locs, preds["locations"])
+
+    # Phone metrics (ML CRF)
+    true_phones = extract_gt_entity_vector(test_df, "gt_victim_phone")
+    phone_m = compute_string_match_metrics(true_phones, preds["phones"])
+
+    # Map URL metrics (ML CRF)
+    true_urls = extract_gt_entity_vector(test_df, "gt_google_map_url")
+    url_m = compute_string_match_metrics(true_urls, preds["urls"])
+    
+    # Coordinates metrics (ML CRF)
     true_coord_strs = extract_gt_coords_vector(test_df)
-    pred_coords = [engine.extract_coords(t) for t in test_texts]
-    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
-    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
+    coords_m = compute_string_match_metrics(true_coord_strs, preds["coords"])
     
     return {
         "approach": "Approach B3 (CRF Sequence Tagger)",
@@ -330,7 +304,7 @@ def run_task2_approach_b3_crf(
         "count_exact_match": 0.0,
         "nonzero_count_mae": 0.0,
         "nonzero_count_exact_match": 0.0
-    }, pred_locs
+    }, preds["locations"]
 
 
 def run_task2_approach_c_hybrid(

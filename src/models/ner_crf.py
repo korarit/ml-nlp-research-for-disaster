@@ -180,6 +180,155 @@ class ThaiLocationCRFTagger:
         return extracted_locations
 
 
+class ThaiMultiNER_CRFTagger:
+    """
+    Pure Machine Learning Multi-Entity Sequence Tagger for Location, Phone, Map URL, and Coordinates.
+    Uses sklearn-crfsuite CRF trained on token-aligned annotations without any regex rules.
+    """
+    def __init__(self, c1: float = 0.01, c2: float = 0.01, max_iterations: int = 60):
+        if not HAS_CRFSUITE:
+            raise ImportError("sklearn-crfsuite is not installed.")
+        self.crf = sklearn_crfsuite.CRF(
+            algorithm="lbfgs",
+            c1=c1,
+            c2=c2,
+            max_iterations=max_iterations,
+            all_possible_transitions=True
+        )
+
+    def _extract_multi_entity_bio(
+        self, text: str, loc_str: Optional[str], phone_str: Optional[str],
+        url_str: Optional[str], lat: Optional[Any], lng: Optional[Any]
+    ) -> Tuple[List[str], List[Tuple[int, int]], List[str]]:
+        text_str = str(text or "")
+        tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+        tags = ["O"] * len(tokens)
+        
+        cur = 0
+        spans = []
+        for tok in tokens:
+            s = cur
+            e = cur + len(tok)
+            cur = e
+            spans.append((s, e))
+            
+        entities = [
+            ("LOC", str(loc_str or "").strip()),
+            ("PHONE", str(phone_str or "").strip()),
+            ("URL", str(url_str or "").strip()),
+        ]
+        if lat is not None and lng is not None and str(lat).lower() not in ("nan", "none", "0.0", "0") and float(lat) != 0.0:
+            c1 = f"{lat}, {lng}"
+            c2 = f"{lat},{lng}"
+            if c1 in text_str:
+                entities.append(("COORDS", c1))
+            elif c2 in text_str:
+                entities.append(("COORDS", c2))
+                
+        for ent_type, val in entities:
+            if not val or val.lower() in ("nan", "none", "null") or val not in text_str:
+                continue
+            start_c = text_str.find(val)
+            end_c = start_c + len(val)
+            first = True
+            for i, (s, e) in enumerate(spans):
+                if max(s, start_c) < min(e, end_c) and tokens[i].strip():
+                    if tags[i] == "O":
+                        tags[i] = f"B-{ent_type}" if first else f"I-{ent_type}"
+                        first = False
+        return tokens, spans, tags
+
+    def _token2features(self, tokens: List[str], i: int) -> Dict[str, Any]:
+        w = tokens[i].strip()
+        feat = {
+            "bias": 1.0,
+            "word": w,
+            "len": len(w),
+            "isdigit": w.isdigit(),
+            "is_prov": w in _PROV_SET or any(w.startswith(p) for p in ["จ.", "จังหวัด"]),
+            "is_dist": any(w.startswith(p) for p in ["อ.", "อำเภอ", "เขต"]),
+            "is_subdist": any(w.startswith(p) for p in ["ต.", "ตำบล", "แขวง"]),
+            "is_land": any(w.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"]),
+            "is_url": "http" in w or "maps" in w or "goo.gl" in w,
+            "has_dot": "." in w,
+            "is_phone_len": w.isdigit() and len(w) in (3, 4, 9, 10)
+        }
+        for offset, prefix in [(-2, "-2:"), (-1, "-1:"), (1, "+1:"), (2, "+2:")]:
+            idx = i + offset
+            if 0 <= idx < len(tokens):
+                nw = tokens[idx].strip()
+                feat[f"{prefix}word"] = nw
+                feat[f"{prefix}is_prov"] = nw in _PROV_SET or any(nw.startswith(p) for p in ["จ.", "จังหวัด"])
+                feat[f"{prefix}is_dist"] = any(nw.startswith(p) for p in ["อ.", "อำเภอ", "เขต"])
+                feat[f"{prefix}is_subdist"] = any(nw.startswith(p) for p in ["ต.", "ตำบล", "แขวง"])
+                feat[f"{prefix}is_land"] = any(nw.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
+                feat[f"{prefix}is_url"] = "http" in nw or "maps" in nw or "goo.gl" in nw
+                feat[f"{prefix}has_dot"] = "." in nw
+        if i == 0:
+            feat["BOS"] = True
+        if i == len(tokens) - 1:
+            feat["EOS"] = True
+        return feat
+
+    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any]):
+        """Trains multi-entity CRF sequence tagger."""
+        X_feats = []
+        y_tags = []
+        for text, loc, phone, url, lat, lng in zip(texts, locs, phones, urls, lats, lngs):
+            tokens, spans, tags = self._extract_multi_entity_bio(text, loc, phone, url, lat, lng)
+            feats = [self._token2features(tokens, i) for i in range(len(tokens))]
+            X_feats.append(feats)
+            y_tags.append(tags)
+        self.crf.fit(X_feats, y_tags)
+        return self
+
+    def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
+        """Predicts extracted spans for Location, Phone, Map URL, and Coordinates purely via ML."""
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        for text in texts:
+            text_str = str(text or "")
+            tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+            if not tokens:
+                pred_locs.append("")
+                pred_phones.append("")
+                pred_urls.append("")
+                pred_coords.append("")
+                continue
+            feats = [self._token2features(tokens, i) for i in range(len(tokens))]
+            preds = self.crf.predict_single(feats)
+            
+            cur = 0
+            spans = []
+            for tok in tokens:
+                s = cur
+                e = cur + len(tok)
+                cur = e
+                spans.append((s, e))
+                
+            def extract_span(target_type: str) -> str:
+                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
+                if target_type == "LOC":
+                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                        idx.pop(0)
+                if idx:
+                    s_c = spans[idx[0]][0]
+                    e_c = spans[idx[-1]][1]
+                    return text_str[s_c:e_c].strip()
+                return ""
+                
+            pred_locs.append(extract_span("LOC"))
+            pred_phones.append(extract_span("PHONE"))
+            pred_urls.append(extract_span("URL"))
+            pred_coords.append(extract_span("COORDS"))
+            
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords
+        }
+
+
 def argmax(vec):
     return torch.argmax(vec).item()
 
