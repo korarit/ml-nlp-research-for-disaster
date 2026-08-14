@@ -94,6 +94,33 @@ def plot_task2_extraction_comparison(df_metrics: pd.DataFrame, graphs_dir: str):
         plt.close()
 
 
+def plot_task4_e2e_summary(e2e_metrics: Dict[str, Any], output_path: str):
+    """Plots Task 4 End-to-End Integrated Pipeline Summary Bar Chart."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    keys = ["overall_e2e_f1", "overall_e2e_f2", "overall_e2e_accuracy", "clinical_qwk"]
+    labels = ["E2E F1-Score", "E2E F2-Score", "E2E Accuracy", "Clinical QWK"]
+    values = [float(e2e_metrics.get(k, 0.0)) for k in keys]
+    
+    colors = ["#2b5c8f", "#d95f02", "#7570b3", "#e7298a"]
+    bars = ax.bar(labels, values, color=colors, width=0.5)
+    
+    for bar in bars:
+        height = bar.get_height()
+        ax.annotate(f"{height:.4f}",
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha="center", va="bottom", fontweight="bold")
+                    
+    ax.set_ylim(0.0, 1.1)
+    ax.set_ylabel("Score (0.0 - 1.0)")
+    ax.set_title("Task 4: End-to-End Integrated Pipeline Benchmark", fontsize=12, fontweight="bold")
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
 def plot_03_f1_f2_vs_latency_tradeoff(df_tradeoff: pd.DataFrame, output_path: str):
     """Plot 3: F1/F2 Score vs p95 Latency Trade-Off Scatter Plot."""
     fig, ax = plt.subplots(figsize=(8, 6))

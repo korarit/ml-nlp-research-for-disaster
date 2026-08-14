@@ -23,6 +23,7 @@ from src.utils.metrics import (
     compute_classification_metrics, compute_triage_clinical_metrics,
     compute_string_match_metrics
 )
+from src.utils.visualization import plot_task4_e2e_summary
 from src.utils.latency import measure_inference_latency
 
 
@@ -214,6 +215,13 @@ def execute_task4_e2e_pipeline(
     with open(os.path.join(output_dir, "task4_e2e_results", "task4_e2e_metrics.json"), "w", encoding="utf-8") as f:
         json.dump(e2e_results, f, indent=2)
         
+    pd.DataFrame([e2e_results]).to_csv(os.path.join(output_dir, "task4_summary.csv"), index=False)
+    
+    plot_task4_e2e_summary(
+        e2e_results,
+        os.path.join(output_dir, "graphs", "02_task4_e2e_summary.png")
+    )
+        
     if notifier:
         notifier.notify_step_complete(
             task_name="Task 4: End-to-End Pipeline",
@@ -221,6 +229,7 @@ def execute_task4_e2e_pipeline(
             metrics={
                 "Overall E2E F1": e2e_results["overall_e2e_f1"],
                 "Overall E2E F2": e2e_results["overall_e2e_f2"],
+                "Overall Accuracy": e2e_results["overall_e2e_accuracy"],
                 "Clinical QWK": e2e_results["clinical_qwk"],
                 "Under-triage Rate": e2e_results["critical_under_triage_rate"],
                 "CPU P95 Latency (ms)": e2e_results["cpu_p95_latency_ms"]
