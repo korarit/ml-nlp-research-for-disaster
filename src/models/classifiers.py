@@ -107,66 +107,73 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return DummyClassifier(**p)
         
     elif m == "LogisticRegression":
-        p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.linear_model.LogisticRegression(**p)
+                cp = {"max_iter": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "n_jobs")}}
+                return cuml.linear_model.LogisticRegression(**cp)
             except Exception:
                 pass
+        p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
         return LogisticRegression(**p)
         
     elif m == "LinearSVC":
-        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.LinearSVC(**p)
+                cp = {"max_iter": 2000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "dual")}}
+                return cuml.svm.LinearSVC(**cp)
             except Exception:
                 pass
+        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
         return LinearSVC(**p)
         
     elif m == "SVC_linear":
-        p = {"kernel": "linear", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVC(**p)
+                cp = {"kernel": "linear", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVC(**cp)
             except Exception:
                 pass
+        p = {"kernel": "linear", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         return SVC(**p)
         
     elif m == "SVC_rbf" or m == "SVC":
-        p = {"kernel": "rbf", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVC(**p)
+                cp = {"kernel": "rbf", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVC(**cp)
             except Exception:
                 pass
+        p = {"kernel": "rbf", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         return SVC(**p)
         
     elif m == "SVC_poly":
-        p = {"kernel": "poly", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVC(**p)
+                cp = {"kernel": "poly", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVC(**cp)
             except Exception:
                 pass
+        p = {"kernel": "poly", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         return SVC(**p)
         
     elif m == "SVC_sigmoid":
-        p = {"kernel": "sigmoid", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVC(**p)
+                cp = {"kernel": "sigmoid", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVC(**cp)
             except Exception:
                 pass
+        p = {"kernel": "sigmoid", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
         return SVC(**p)
         
     elif m == "RidgeClassifier":
-        p = {"random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.linear_model.Ridge(**p)
+                cp = {k: v for k, v in kwargs.items() if k != "random_state"}
+                return cuml.linear_model.Ridge(**cp)
             except Exception:
                 pass
+        p = {"random_state": random_state, **kwargs}
         return RidgeClassifier(**p)
         
     elif m == "PassiveAggressiveClassifier":
@@ -174,30 +181,31 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return PassiveAggressiveClassifier(**p)
         
     elif m == "SGDClassifier":
-        p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.linear_model.MBSGDClassifier(**p)
+                cp = {"epochs": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "n_jobs", "max_iter")}}
+                return cuml.linear_model.MBSGDClassifier(**cp)
             except Exception:
                 pass
+        p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
         return SGDClassifier(**p)
         
     elif m == "MultinomialNB":
-        p = {**kwargs}
         if gpu_active:
             try:
-                return cuml.naive_bayes.MultinomialNB(**p)
+                return cuml.naive_bayes.MultinomialNB(**kwargs)
             except Exception:
                 pass
+        p = {**kwargs}
         return MultinomialNB(**p)
         
     elif m == "ComplementNB":
-        p = {**kwargs}
         if gpu_active:
             try:
-                return cuml.naive_bayes.ComplementNB(**p)
+                return cuml.naive_bayes.ComplementNB(**kwargs)
             except Exception:
                 pass
+        p = {**kwargs}
         return ComplementNB(**p)
         
     elif m == "KNeighborsClassifier":

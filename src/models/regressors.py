@@ -56,57 +56,63 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return DummyRegressor(**p)
         
     elif m == "Ridge":
-        p = {"random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.linear_model.Ridge(**p)
+                cp = {k: v for k, v in kwargs.items() if k != "random_state"}
+                return cuml.linear_model.Ridge(**cp)
             except Exception:
                 pass
+        p = {"random_state": random_state, **kwargs}
         return Ridge(**p)
         
     elif m == "LinearSVR":
-        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.LinearSVR(**p)
+                cp = {"max_iter": 2000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "dual")}}
+                return cuml.svm.LinearSVR(**cp)
             except Exception:
                 pass
+        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
         return LinearSVR(**p)
         
     elif m == "SVR_linear":
-        p = {"kernel": "linear", "max_iter": 5000, "cache_size": 1000, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVR(**p)
+                cp = {"kernel": "linear", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVR(**cp)
             except Exception:
                 pass
+        p = {"kernel": "linear", "max_iter": 5000, "cache_size": 1000, **kwargs}
         return SVR(**p)
         
     elif m == "SVR_rbf" or m == "SVR":
-        p = {"kernel": "rbf", "max_iter": 5000, "cache_size": 1000, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVR(**p)
+                cp = {"kernel": "rbf", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVR(**cp)
             except Exception:
                 pass
+        p = {"kernel": "rbf", "max_iter": 5000, "cache_size": 1000, **kwargs}
         return SVR(**p)
         
     elif m == "SVR_poly":
-        p = {"kernel": "poly", "max_iter": 5000, "cache_size": 1000, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVR(**p)
+                cp = {"kernel": "poly", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVR(**cp)
             except Exception:
                 pass
+        p = {"kernel": "poly", "max_iter": 5000, "cache_size": 1000, **kwargs}
         return SVR(**p)
         
     elif m == "SVR_sigmoid":
-        p = {"kernel": "sigmoid", "max_iter": 5000, "cache_size": 1000, **kwargs}
         if gpu_active:
             try:
-                return cuml.svm.SVR(**p)
+                cp = {"kernel": "sigmoid", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
+                return cuml.svm.SVR(**cp)
             except Exception:
                 pass
+        p = {"kernel": "sigmoid", "max_iter": 5000, "cache_size": 1000, **kwargs}
         return SVR(**p)
         
     elif m == "PassiveAggressiveRegressor":
@@ -114,12 +120,13 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return PassiveAggressiveRegressor(**p)
         
     elif m == "SGDRegressor":
-        p = {"max_iter": 1000, "random_state": random_state, **kwargs}
         if gpu_active:
             try:
-                return cuml.linear_model.MBSGDRegressor(**p)
+                cp = {"epochs": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "max_iter")}}
+                return cuml.linear_model.MBSGDRegressor(**cp)
             except Exception:
                 pass
+        p = {"max_iter": 1000, "random_state": random_state, **kwargs}
         return SGDRegressor(**p)
         
     elif m == "KNeighborsRegressor":
