@@ -42,8 +42,14 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     
     # Location match
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
-    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
+    
+    # Coordinates match
+    true_coord_strs = [f"{row.get('gt_lat', '')},{row.get('gt_lng', '')}" if pd.notna(row.get('gt_lat')) else "" for _, row in test_df.iterrows()]
+    pred_coords = [engine.extract_coords(t) for t in texts]
+    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
+    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
     
     # Count metrics
     count_maes = []
@@ -70,6 +76,7 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
         "f2": float(np.mean(count_f2s)) if count_f2s else 0.0,
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
+        "coords_exact_match": coords_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": float(np.mean(count_maes)) if count_maes else 0.0,
         "mean_count_rmse": float(np.mean(count_rmses)) if count_rmses else 0.0,
@@ -97,8 +104,13 @@ def run_task2_approach_b1_binned(
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
-    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
+    true_coord_strs = [f"{row.get('gt_lat', '')},{row.get('gt_lng', '')}" if pd.notna(row.get('gt_lat')) else "" for _, row in test_df.iterrows()]
+    pred_coords = [engine.extract_coords(t) for t in texts]
+    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
+    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
 
     X_train = train_df["generated_text"].values
     X_test = test_df["generated_text"].values
@@ -136,6 +148,7 @@ def run_task2_approach_b1_binned(
         "f2": float(np.mean(f2s)) if f2s else 0.0,
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
+        "coords_exact_match": coords_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
@@ -163,8 +176,13 @@ def run_task2_approach_b2_regression(
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
-    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
+    true_coord_strs = [f"{row.get('gt_lat', '')},{row.get('gt_lng', '')}" if pd.notna(row.get('gt_lat')) else "" for _, row in test_df.iterrows()]
+    pred_coords = [engine.extract_coords(t) for t in texts]
+    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
+    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
 
     X_train = train_df["generated_text"].values
     X_test = test_df["generated_text"].values
@@ -205,6 +223,7 @@ def run_task2_approach_b2_regression(
         "f2": float(np.mean(f2s)) if f2s else 0.0,
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
+        "coords_exact_match": coords_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
@@ -226,8 +245,13 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
-    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    pred_locs = [str(engine.extract_location(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
+    true_coord_strs = [f"{row.get('gt_lat', '')},{row.get('gt_lng', '')}" if pd.notna(row.get('gt_lat')) else "" for _, row in test_df.iterrows()]
+    pred_coords = [engine.extract_coords(t) for t in texts]
+    pred_coord_strs = [f"{c[0]},{c[1]}" if c[0] is not None else "" for c in pred_coords]
+    coords_m = compute_string_match_metrics(true_coord_strs, pred_coord_strs)
     
     return {
         "approach": "Approach B3 (CRF Sequence Tagger)",
@@ -235,6 +259,7 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
         "f2": loc_m["exact_match_rate"],
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
+        "coords_exact_match": coords_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": 0.0,
         "mean_count_rmse": 0.0,
@@ -260,6 +285,7 @@ def run_task2_approach_c_hybrid(
         "f2": res_reg["f2"],
         "phone_exact_match": res_a["phone_exact_match"],
         "map_url_exact_match": res_a["map_url_exact_match"],
+        "coords_exact_match": res_a["coords_exact_match"],
         "location_exact_match": res_a["location_exact_match"],
         "mean_count_mae": res_reg["mean_count_mae"],
         "mean_count_rmse": res_reg["mean_count_rmse"],
@@ -312,9 +338,11 @@ def execute_task2_pipeline(
                     "F2-Score": res_dict.get("f2", 0.0),
                     "Phone Match Rate": res_dict.get("phone_exact_match", 0.0),
                     "Location Match Rate": res_dict.get("location_exact_match", 0.0),
+                    "Map URL Match Rate": res_dict.get("map_url_exact_match", 0.0),
+                    "Coordinates Match Rate": res_dict.get("coords_exact_match", 0.0),
+                    "Count Exact Match Rate": res_dict.get("count_exact_match", 0.0),
                     "Count MAE": res_dict.get("mean_count_mae", 0.0),
-                    "Count RMSE": res_dict.get("mean_count_rmse", 0.0),
-                    "Count Exact Match": res_dict.get("count_exact_match", 0.0)
+                    "Count RMSE": res_dict.get("mean_count_rmse", 0.0)
                 }
             )
 

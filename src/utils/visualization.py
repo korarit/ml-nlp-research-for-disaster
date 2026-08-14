@@ -63,7 +63,7 @@ def plot_task2_extraction_comparison(df_metrics: pd.DataFrame, graphs_dir: str):
     os.makedirs(graphs_dir, exist_ok=True)
     
     # 1. Scores Comparison (F1, F2, Phone Match, Location Match, Count Exact Match) - Higher is better
-    score_cols = [c for c in ["f1", "f2", "count_exact_match", "phone_exact_match", "location_exact_match"] if c in df_metrics.columns]
+    score_cols = [c for c in ["f1", "f2", "count_exact_match", "phone_exact_match", "location_exact_match", "map_url_exact_match", "coords_exact_match"] if c in df_metrics.columns]
     if score_cols:
         fig, ax = plt.subplots(figsize=(11, 6))
         melted = df_metrics.melt(id_vars=[model_col], value_vars=score_cols, var_name="Metric", value_name="Score")

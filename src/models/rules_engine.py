@@ -31,11 +31,12 @@ class SimpleKeywordRules:
 
 
 class ExtractionRulesEngine:
-    """Approach A Rule-Based Extraction Engine for Phone, Coordinates, Map URLs, and Counts."""
+    """Approach A Rule-Based Extraction Engine for Phone, Coordinates, Map URLs, Locations, and Counts."""
     
     PHONE_REGEX = re.compile(r"(?:0[689]\d{8}|0\d{1,2}-\d{3}-\d{4}|0\d{8,9})")
     COORDS_REGEX = re.compile(r"(1\d\.\d{3,})\s*,\s*(100\.\d{3,})")
     MAP_URL_REGEX = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|www\.google\.com/maps|maps\.google\.com)[^\s,]+")
+    LOCATION_REGEX = re.compile(r"(?:ที่|บริเวณ|ซอย|ถนน|ต\.|อ\.|จ\.|หมู่ที่?|แขวง|เขต|อพาร์ทเม้นท์|บ้าน|หมู่บ้าน|ริม|ใกล้|ตรงข้าม)\s*([ก-๙0-9\s]+)")
     
     # Count patterns
     COUNT_PATTERNS = {
@@ -52,6 +53,10 @@ class ExtractionRulesEngine:
     
     def extract_phone(self, text: str) -> Optional[str]:
         m = self.PHONE_REGEX.search(str(text))
+        return m.group(0) if m else None
+
+    def extract_location(self, text: str) -> Optional[str]:
+        m = self.LOCATION_REGEX.search(str(text))
         return m.group(0) if m else None
         
     def extract_coords(self, text: str) -> Tuple[Optional[float], Optional[float]]:
