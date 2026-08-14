@@ -123,12 +123,13 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return SGDRegressor(**p)
         
     elif m == "KNeighborsRegressor":
-        p = {"n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.neighbors.KNeighborsRegressor(**p)
+                cp = {k: v for k, v in kwargs.items() if k != "n_jobs"}
+                return cuml.neighbors.KNeighborsRegressor(**cp)
             except Exception:
                 pass
+        p = {"n_jobs": -1, **kwargs}
         return KNeighborsRegressor(**p)
         
     elif m == "MLPRegressor":
@@ -140,12 +141,13 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return DecisionTreeRegressor(**p)
         
     elif m == "RandomForestRegressor":
-        p = {"n_estimators": 100, "random_state": random_state, "n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.ensemble.RandomForestRegressor(**p)
+                cp = {"n_estimators": 100, "random_state": random_state, **{k: v for k, v in kwargs.items() if k != "n_jobs"}}
+                return cuml.ensemble.RandomForestRegressor(**cp)
             except Exception:
                 pass
+        p = {"n_estimators": 100, "random_state": random_state, "n_jobs": -1, **kwargs}
         return RandomForestRegressor(**p)
         
     elif m == "ExtraTreesRegressor":

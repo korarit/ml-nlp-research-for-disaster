@@ -201,12 +201,13 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return ComplementNB(**p)
         
     elif m == "KNeighborsClassifier":
-        p = {"n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.neighbors.KNeighborsClassifier(**p)
+                cp = {k: v for k, v in kwargs.items() if k != "n_jobs"}
+                return cuml.neighbors.KNeighborsClassifier(**cp)
             except Exception:
                 pass
+        p = {"n_jobs": -1, **kwargs}
         return KNeighborsClassifier(**p)
         
     elif m == "MLPClassifier":
@@ -218,12 +219,13 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return DecisionTreeClassifier(**p)
         
     elif m == "RandomForestClassifier":
-        p = {"n_estimators": 100, "random_state": random_state, "n_jobs": -1, **kwargs}
         if gpu_active:
             try:
-                return cuml.ensemble.RandomForestClassifier(**p)
+                cp = {"n_estimators": 100, "random_state": random_state, **{k: v for k, v in kwargs.items() if k != "n_jobs"}}
+                return cuml.ensemble.RandomForestClassifier(**cp)
             except Exception:
                 pass
+        p = {"n_estimators": 100, "random_state": random_state, "n_jobs": -1, **kwargs}
         return RandomForestClassifier(**p)
         
     elif m == "ExtraTreesClassifier":
