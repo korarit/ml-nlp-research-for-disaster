@@ -32,16 +32,22 @@ def plot_01_optimization_history(trials_df: pd.DataFrame, output_path: str):
 
 
 def plot_02_model_performance_comparison(df_metrics: pd.DataFrame, output_path: str, task_name: str = "Task 1"):
-    """Plot 2: Model Performance Comparison Bar Chart."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    metrics_to_plot = [c for c in ["f1", "f2", "precision", "recall", "accuracy", "mcc"] if c in df_metrics.columns]
+    """Plot 2: Model / Approach Performance Comparison Bar Chart."""
+    fig, ax = plt.subplots(figsize=(11, 6))
+    model_col = "approach" if "approach" in df_metrics.columns else ("model" if "model" in df_metrics.columns else None)
+    metrics_to_plot = [
+        c for c in ["f1", "f2", "precision", "recall", "accuracy", "mcc",
+                    "phone_exact_match", "location_exact_match", "count_exact_match", "mean_count_mae"]
+        if c in df_metrics.columns
+    ]
     
-    if "model" in df_metrics.columns and len(metrics_to_plot) > 0:
-        melted = df_metrics.melt(id_vars=["model"], value_vars=metrics_to_plot, var_name="Metric", value_name="Score")
-        sns.barplot(data=melted, x="model", y="Score", hue="Metric", ax=ax, palette="Set2")
+    if model_col and len(metrics_to_plot) > 0:
+        melted = df_metrics.melt(id_vars=[model_col], value_vars=metrics_to_plot, var_name="Metric", value_name="Score")
+        sns.barplot(data=melted, x=model_col, y="Score", hue="Metric", ax=ax, palette="Set2")
         ax.set_title(f"Model Performance Comparison - {task_name}", fontsize=12, fontweight="bold")
-        ax.tick_params(axis="x", rotation=45)
-        ax.set_ylim(0.0, 1.05)
+        ax.tick_params(axis="x", rotation=30)
+        plt.xticks(ha="right")
+        ax.set_xlabel("Model / Approach")
         plt.tight_layout()
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         plt.savefig(output_path, dpi=300)

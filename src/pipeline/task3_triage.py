@@ -19,6 +19,7 @@ from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.rules_engine import PediatricIITTRules, AdultIITTRules, ClauseSplitterRules
 from src.utils.metrics import compute_triage_clinical_metrics, compute_string_match_metrics
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
+from src.utils.visualization import plot_02_model_performance_comparison
 
 
 def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
@@ -211,6 +212,14 @@ def execute_task3_pipeline(
             
     summary_df = pd.DataFrame(results)
     summary_df.to_csv(task3_csv, index=False)
+    
+    os.makedirs(os.path.join(output_dir, "graphs"), exist_ok=True)
+    renamed_df = summary_df.rename(columns={"f1_weighted": "f1", "triage_accuracy": "accuracy"})
+    plot_02_model_performance_comparison(
+        renamed_df,
+        os.path.join(output_dir, "graphs", "02_task3_triage_comparison.png"),
+        task_name="Task 3 Clinical Triage"
+    )
     
     if notifier:
         notifier.notify_task_complete(

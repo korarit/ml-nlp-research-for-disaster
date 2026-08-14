@@ -22,6 +22,7 @@ from src.utils.metrics import (
     compute_classification_metrics
 )
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
+from src.utils.visualization import plot_02_model_performance_comparison
 
 
 def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
@@ -39,20 +40,32 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
     url_m = compute_string_match_metrics(true_urls, pred_urls)
     
+    # Location match
+    true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
+    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    loc_m = compute_string_match_metrics(true_locs, pred_locs)
+    
     # Count metrics
     count_maes = []
+    count_rmses = []
+    count_ems = []
     for field in COUNT_COLUMNS:
         if field in test_df.columns:
             y_t = test_df[field].values
             y_p = np.array([engine.extract_count(t, field) for t in texts])
             m = compute_count_regression_metrics(y_t, y_p)
             count_maes.append(m["mae"])
+            count_rmses.append(m["rmse"])
+            count_ems.append(m["exact_match"])
             
     return {
         "approach": "Approach A (Rules)",
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
-        "mean_count_mae": float(np.mean(count_maes)) if count_maes else 0.0
+        "location_exact_match": loc_m["exact_match_rate"],
+        "mean_count_mae": float(np.mean(count_maes)) if count_maes else 0.0,
+        "mean_count_rmse": float(np.mean(count_rmses)) if count_rmses else 0.0,
+        "count_exact_match": float(np.mean(count_ems)) if count_ems else 0.0
     }
 
 
@@ -66,24 +79,36 @@ def run_task2_approach_b1_binned(
     X_train = train_df["generated_text"].values
     X_test = test_df["generated_text"].values
     
-    f1_scores = []
+    maes = []
+    rmses = []
+    ems = []
     for field in COUNT_COLUMNS:
         if field in train_df.columns and field in test_df.columns:
-            y_tr_binned = bin_count_target(train_df[field].values)
-            y_te_binned = bin_count_target(test_df[field].values)
+            y_tr_raw = train_df[field].values.astype(float)
+            y_te_raw = test_df[field].values.astype(float)
+            y_tr_binned = bin_count_target(y_tr_raw)
+            y_te_binned = bin_count_target(y_te_raw)
             
             pipe = Pipeline([
                 ("tfidf", create_tfidf_vectorizer(use_hybrid=True)),
                 ("clf", get_classifier(model_name, use_gpu=use_gpu))
             ])
             pipe.fit(X_train, y_tr_binned)
-            preds = pipe.predict(X_test)
-            m = compute_classification_metrics(y_te_binned, preds)
-            f1_scores.append(m["f1_weighted"])
+            preds_binned = pipe.predict(X_test)
+            
+            m = compute_count_regression_metrics(y_te_binned, preds_binned)
+            maes.append(m["mae"])
+            rmses.append(m["rmse"])
+            ems.append(m["exact_match"])
             
     return {
         "approach": f"Approach B1 (Binned {model_name})",
-        "mean_count_binned_f1": float(np.mean(f1_scores)) if f1_scores else 0.0
+        "phone_exact_match": 0.0,
+        "map_url_exact_match": 0.0,
+        "location_exact_match": 0.0,
+        "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
+        "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
+        "count_exact_match": float(np.mean(ems)) if ems else 0.0
     }
 
 
@@ -98,6 +123,8 @@ def run_task2_approach_b2_regression(
     X_test = test_df["generated_text"].values
     
     maes = []
+    rmses = []
+    ems = []
     all_y_true = []
     all_y_pred = []
     
@@ -115,12 +142,19 @@ def run_task2_approach_b2_regression(
             
             m = compute_count_regression_metrics(y_te, preds)
             maes.append(m["mae"])
+            rmses.append(m["rmse"])
+            ems.append(m["exact_match"])
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
             
     return {
         "approach": f"Approach B2 (Regressor {model_name})",
-        "mean_count_mae": float(np.mean(maes)) if maes else 0.0
+        "phone_exact_match": 0.0,
+        "map_url_exact_match": 0.0,
+        "location_exact_match": 0.0,
+        "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
+        "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
+        "count_exact_match": float(np.mean(ems)) if ems else 0.0
     }, np.array(all_y_true), np.array(all_y_pred)
 
 
@@ -130,14 +164,17 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
     engine = ExtractionRulesEngine()
     
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
-    # Simple regex fallback if CRF model is evaluated token-level
     pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
     
     return {
         "approach": "Approach B3 (CRF Sequence Tagger)",
+        "phone_exact_match": 0.0,
+        "map_url_exact_match": 0.0,
         "location_exact_match": loc_m["exact_match_rate"],
-        "jaccard_similarity": loc_m["jaccard_similarity"]
+        "mean_count_mae": 0.0,
+        "mean_count_rmse": 0.0,
+        "count_exact_match": 0.0
     }
 
 
@@ -150,21 +187,17 @@ def run_task2_approach_c_hybrid(
     """
     Evaluates Approach C: Hybrid System (Best ML Regressor for counts + Rules Engine for Regex targets).
     """
-    engine = ExtractionRulesEngine()
-    texts = test_df["generated_text"].tolist()
-    
-    # Phone match
-    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
-    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
-    phone_m = compute_string_match_metrics(true_phones, pred_phones)
-    
-    # ML Regressor for counts
+    res_a = run_task2_approach_a_rules(test_df)
     res_reg, _, _ = run_task2_approach_b2_regression(train_df, test_df, best_regressor_name, use_gpu=use_gpu)
     
     return {
         "approach": f"Approach C (Hybrid Rules + {best_regressor_name}) ⭐",
-        "phone_exact_match": phone_m["exact_match_rate"],
-        "mean_count_mae": res_reg["mean_count_mae"]
+        "phone_exact_match": res_a["phone_exact_match"],
+        "map_url_exact_match": res_a["map_url_exact_match"],
+        "location_exact_match": res_a["location_exact_match"],
+        "mean_count_mae": res_reg["mean_count_mae"],
+        "mean_count_rmse": res_reg["mean_count_rmse"],
+        "count_exact_match": res_reg["count_exact_match"]
     }
 
 
@@ -181,6 +214,7 @@ def execute_task2_pipeline(
     train_df, test_df = load_all_datasets(train_path=train_path, test_path=test_path)
     os.makedirs(os.path.join(output_dir, "stat_tests"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "graphs"), exist_ok=True)
     
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")
@@ -202,22 +236,27 @@ def execute_task2_pipeline(
             return True
         return False
 
+    def notify_step(res_dict: Dict[str, Any]):
+        if notifier:
+            notifier.notify_step_complete(
+                task_name="Task 2: Extraction",
+                step_name=res_dict["approach"],
+                metrics={
+                    "Phone Match Rate": res_dict.get("phone_exact_match", 0.0),
+                    "Location Match Rate": res_dict.get("location_exact_match", 0.0),
+                    "Count MAE": res_dict.get("mean_count_mae", 0.0),
+                    "Count RMSE": res_dict.get("mean_count_rmse", 0.0),
+                    "Count Exact Match": res_dict.get("count_exact_match", 0.0)
+                }
+            )
+
     # 1. Approach A (Rules)
     app_a_name = "Approach A (Rules)"
     if not should_skip(app_a_name):
         res_a = run_task2_approach_a_rules(test_df)
         results.append(res_a)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
-        if notifier:
-            notifier.notify_step_complete(
-                task_name="Task 2: Extraction",
-                step_name=res_a["approach"],
-                metrics={
-                    "Phone Match": res_a.get("phone_exact_match", 0.0),
-                    "Map URL Match": res_a.get("map_url_exact_match", 0.0),
-                    "Mean Count MAE": res_a.get("mean_count_mae", 0.0)
-                }
-            )
+        notify_step(res_a)
     
     # 2. Approach B1 (Binned Classifiers)
     app_b1_name = "Approach B1 (Binned XGBClassifier)"
@@ -225,12 +264,7 @@ def execute_task2_pipeline(
         res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu)
         results.append(res_b1)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
-        if notifier:
-            notifier.notify_step_complete(
-                task_name="Task 2: Extraction",
-                step_name=res_b1["approach"],
-                metrics={"Mean Count Binned F1": res_b1.get("mean_count_binned_f1", 0.0)}
-            )
+        notify_step(res_b1)
     
     # 3. Approach B2 (Regressors benchmark)
     reg_models = selected_regressors or ["DummyRegressor", "Ridge", "RandomForestRegressor", "XGBRegressor", "LGBMRegressor"]
@@ -238,22 +272,14 @@ def execute_task2_pipeline(
     y_true_all = None
     
     for r_name in reg_models:
-        app_b2_name = f"Approach B2 (Regressor: {r_name})"
+        app_b2_name = f"Approach B2 (Regressor {r_name})"
         if not should_skip(app_b2_name):
             res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu)
             results.append(res_b2)
             reg_predictions[r_name] = y_p
             y_true_all = y_t
             pd.DataFrame(results).to_csv(task2_csv, index=False)
-            if notifier:
-                notifier.notify_step_complete(
-                    task_name="Task 2: Extraction",
-                    step_name=res_b2["approach"],
-                    metrics={
-                        "Count MAE": res_b2.get("mean_count_mae", 0.0),
-                        "Count RMSE": res_b2.get("mean_count_rmse", 0.0)
-                    }
-                )
+            notify_step(res_b2)
         
     # 4. Approach B3 (CRF Sequence Tagger)
     app_b3_name = "Approach B3 (CRF Sequence Tagger)"
@@ -261,31 +287,15 @@ def execute_task2_pipeline(
         res_b3 = run_task2_approach_b3_crf(test_df)
         results.append(res_b3)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
-        if notifier:
-            notifier.notify_step_complete(
-                task_name="Task 2: Extraction",
-                step_name=res_b3["approach"],
-                metrics={
-                    "Location Exact Match": res_b3.get("location_exact_match", 0.0),
-                    "Jaccard Similarity": res_b3.get("jaccard_similarity", 0.0)
-                }
-            )
+        notify_step(res_b3)
     
     # 5. Approach C (Hybrid System)
-    app_c_name = "Approach C (Hybrid Rules + ML)"
+    app_c_name = "Approach C (Hybrid Rules + XGBRegressor) ⭐"
     if not should_skip(app_c_name):
         res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu)
         results.append(res_c)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
-        if notifier:
-            notifier.notify_step_complete(
-                task_name="Task 2: Extraction",
-                step_name=res_c["approach"],
-                metrics={
-                    "Hybrid Phone Match": res_c.get("phone_exact_match", 0.0),
-                    "Hybrid Count MAE": res_c.get("mean_count_mae", 0.0)
-                }
-            )
+        notify_step(res_c)
     
     # Wilcoxon Residual test on regression models
     if y_true_all is not None:
@@ -299,12 +309,17 @@ def execute_task2_pipeline(
     summary_df = pd.DataFrame(results)
     summary_df.to_csv(task2_csv, index=False)
     
+    # Visualizations / Graph generation
+    plot_02_model_performance_comparison(
+        summary_df,
+        os.path.join(output_dir, "graphs", "02_task2_extraction_comparison.png"),
+        task_name="Task 2 Extraction"
+    )
+    
     if notifier:
         notifier.notify_task_complete(
             task_name="Task 2: Extraction & Count Regression",
-            summary_info=f"Evaluated `{len(results)}` extraction approaches/models."
+            summary_info=f"Evaluated `{len(results)}` extraction approaches/models with standardized metrics."
         )
         
     return summary_df
-
-
