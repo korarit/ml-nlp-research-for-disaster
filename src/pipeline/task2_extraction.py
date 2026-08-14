@@ -423,6 +423,7 @@ def execute_task2_pipeline(
     # 1. Approach A (Rules)
     app_a_name = "Approach A (Rules)"
     if not should_skip(app_a_name):
+        print(f"--- Task 2 Running: {app_a_name} ---")
         res_a = run_task2_approach_a_rules(test_df)
         results.append(res_a)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
@@ -431,6 +432,7 @@ def execute_task2_pipeline(
     # 2. Approach B1 (Binned Classifiers)
     app_b1_name = "Approach B1 (Binned XGBClassifier)"
     if not should_skip(app_b1_name):
+        print(f"--- Task 2 Running: {app_b1_name} ---")
         res_b1 = run_task2_approach_b1_binned(train_df, test_df, "XGBClassifier", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
         results.append(res_b1)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
@@ -444,6 +446,7 @@ def execute_task2_pipeline(
     for r_name in reg_models:
         app_b2_name = f"Approach B2 (Regressor {r_name})"
         if not should_skip(app_b2_name):
+            print(f"--- Task 2 Running: {app_b2_name} ---")
             res_b2, y_t, y_p = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
             results.append(res_b2)
             reg_predictions[r_name] = y_p
@@ -454,6 +457,7 @@ def execute_task2_pipeline(
     # 4. Approach B3 (CRF Sequence Tagger)
     app_b3_name = "Approach B3 (CRF Sequence Tagger)"
     if not should_skip(app_b3_name):
+        print(f"--- Task 2 Running: {app_b3_name} ---")
         res_b3 = run_task2_approach_b3_crf(test_df)
         results.append(res_b3)
         pd.DataFrame(results).to_csv(task2_csv, index=False)
@@ -462,6 +466,7 @@ def execute_task2_pipeline(
     # 5. Approach C (Hybrid System)
     app_c_name = "Approach C (Hybrid Rules + XGBRegressor) ⭐"
     if not should_skip(app_c_name):
+        print(f"--- Task 2 Running: {app_c_name} ---")
         res_c = run_task2_approach_c_hybrid(train_df, test_df, "XGBRegressor", use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
         results.append(res_c)
         pd.DataFrame(results).to_csv(task2_csv, index=False)

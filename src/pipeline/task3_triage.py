@@ -181,6 +181,7 @@ def execute_task3_pipeline(
     # -------------------------------------------------------------
     key_3_1 = "ClauseSplitterRules"
     if not should_skip(key_3_1):
+        print(f"--- Task 3.1 Running: {key_3_1} ---")
         res_3_1 = run_subtask_3_1_people_extraction(test_df)
         results.append(res_3_1)
         pd.DataFrame(results).to_csv(task3_csv, index=False)
@@ -196,6 +197,7 @@ def execute_task3_pipeline(
     for m_name in pedia_models:
         key_3_2 = f"Pediatric_{m_name}"
         if not should_skip(key_3_2):
+            print(f"--- Task 3.2 Running: {key_3_2} ---")
             m_res, preds = run_triage_cv_and_test(train_pedia, test_pedia, m_name, is_pediatric=True, use_gpu=use_gpu)
             m_res["model"] = key_3_2
             results.append(m_res)
@@ -222,6 +224,7 @@ def execute_task3_pipeline(
     for m_name in adult_models:
         key_3_3 = f"Adult_{m_name}"
         if not should_skip(key_3_3):
+            print(f"--- Task 3.3 Running: {key_3_3} ---")
             m_res, preds = run_triage_cv_and_test(train_adult, test_adult, m_name, is_pediatric=False, use_gpu=use_gpu)
             m_res["model"] = key_3_3
             results.append(m_res)
