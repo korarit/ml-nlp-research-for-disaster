@@ -84,6 +84,22 @@ def run_task2_approach_b1_binned(
     use_gpu: bool = True
 ) -> Dict[str, Any]:
     """Evaluates Approach B1 Binned Categorical Classification (0, 1, 2, 3+) across count fields."""
+    engine = ExtractionRulesEngine()
+    texts = test_df["generated_text"].tolist()
+    
+    # Phone, Map URL, and Location match (via Rules engine)
+    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
+    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
+    phone_m = compute_string_match_metrics(true_phones, pred_phones)
+    
+    true_urls = [str(u or "") for u in test_df.get("gt_google_map_url", [])]
+    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
+    url_m = compute_string_match_metrics(true_urls, pred_urls)
+    
+    true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
+    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
     X_train = train_df["generated_text"].values
     X_test = test_df["generated_text"].values
     
@@ -118,9 +134,9 @@ def run_task2_approach_b1_binned(
         "approach": f"Approach B1 (Binned {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": 0.0,
-        "map_url_exact_match": 0.0,
-        "location_exact_match": 0.0,
+        "phone_exact_match": phone_m["exact_match_rate"],
+        "map_url_exact_match": url_m["exact_match_rate"],
+        "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0
@@ -134,6 +150,22 @@ def run_task2_approach_b2_regression(
     use_gpu: bool = True
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
     """Evaluates Approach B2 Continuous Numerical Regressors across count fields."""
+    engine = ExtractionRulesEngine()
+    texts = test_df["generated_text"].tolist()
+    
+    # Phone, Map URL, and Location match (via Rules engine)
+    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
+    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
+    phone_m = compute_string_match_metrics(true_phones, pred_phones)
+    
+    true_urls = [str(u or "") for u in test_df.get("gt_google_map_url", [])]
+    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
+    url_m = compute_string_match_metrics(true_urls, pred_urls)
+    
+    true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
+    pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
+    loc_m = compute_string_match_metrics(true_locs, pred_locs)
+
     X_train = train_df["generated_text"].values
     X_test = test_df["generated_text"].values
     
@@ -171,9 +203,9 @@ def run_task2_approach_b2_regression(
         "approach": f"Approach B2 (Regressor {model_name})",
         "f1": float(np.mean(f1s)) if f1s else 0.0,
         "f2": float(np.mean(f2s)) if f2s else 0.0,
-        "phone_exact_match": 0.0,
-        "map_url_exact_match": 0.0,
-        "location_exact_match": 0.0,
+        "phone_exact_match": phone_m["exact_match_rate"],
+        "map_url_exact_match": url_m["exact_match_rate"],
+        "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
         "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
         "count_exact_match": float(np.mean(ems)) if ems else 0.0
@@ -185,6 +217,14 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
     texts = test_df["generated_text"].tolist()
     engine = ExtractionRulesEngine()
     
+    true_phones = [str(p or "") for p in test_df.get("gt_victim_phone", [])]
+    pred_phones = [str(engine.extract_phone(t) or "") for t in texts]
+    phone_m = compute_string_match_metrics(true_phones, pred_phones)
+
+    true_urls = [str(u or "") for u in test_df.get("gt_google_map_url", [])]
+    pred_urls = [str(engine.extract_map_url(t) or "") for t in texts]
+    url_m = compute_string_match_metrics(true_urls, pred_urls)
+    
     true_locs = [str(l or "") for l in test_df.get("gt_location_name", [])]
     pred_locs = [str(engine.extract_phone(t) or "") for t in texts]
     loc_m = compute_string_match_metrics(true_locs, pred_locs)
@@ -193,8 +233,8 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
         "approach": "Approach B3 (CRF Sequence Tagger)",
         "f1": loc_m["exact_match_rate"],
         "f2": loc_m["exact_match_rate"],
-        "phone_exact_match": 0.0,
-        "map_url_exact_match": 0.0,
+        "phone_exact_match": phone_m["exact_match_rate"],
+        "map_url_exact_match": url_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
         "mean_count_mae": 0.0,
         "mean_count_rmse": 0.0,
