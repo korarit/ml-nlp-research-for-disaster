@@ -49,17 +49,25 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
     count_maes = []
     count_rmses = []
     count_ems = []
+    count_f1s = []
+    count_f2s = []
     for field in COUNT_COLUMNS:
         if field in test_df.columns:
-            y_t = test_df[field].values
-            y_p = np.array([engine.extract_count(t, field) for t in texts])
+            y_t = test_df[field].values.astype(float)
+            y_p = np.array([engine.extract_count(t, field) for t in texts], dtype=float)
             m = compute_count_regression_metrics(y_t, y_p)
             count_maes.append(m["mae"])
             count_rmses.append(m["rmse"])
             count_ems.append(m["exact_match"])
             
+            clf_m = compute_classification_metrics(bin_count_target(y_t), bin_count_target(y_p))
+            count_f1s.append(clf_m["f1_weighted"])
+            count_f2s.append(clf_m["f2"])
+            
     return {
         "approach": "Approach A (Rules)",
+        "f1": float(np.mean(count_f1s)) if count_f1s else 0.0,
+        "f2": float(np.mean(count_f2s)) if count_f2s else 0.0,
         "phone_exact_match": phone_m["exact_match_rate"],
         "map_url_exact_match": url_m["exact_match_rate"],
         "location_exact_match": loc_m["exact_match_rate"],
@@ -82,6 +90,8 @@ def run_task2_approach_b1_binned(
     maes = []
     rmses = []
     ems = []
+    f1s = []
+    f2s = []
     for field in COUNT_COLUMNS:
         if field in train_df.columns and field in test_df.columns:
             y_tr_raw = train_df[field].values.astype(float)
@@ -97,12 +107,17 @@ def run_task2_approach_b1_binned(
             preds_binned = pipe.predict(X_test)
             
             m = compute_count_regression_metrics(y_te_binned, preds_binned)
+            clf_m = compute_classification_metrics(y_te_binned, preds_binned)
             maes.append(m["mae"])
             rmses.append(m["rmse"])
             ems.append(m["exact_match"])
+            f1s.append(clf_m["f1_weighted"])
+            f2s.append(clf_m["f2"])
             
     return {
         "approach": f"Approach B1 (Binned {model_name})",
+        "f1": float(np.mean(f1s)) if f1s else 0.0,
+        "f2": float(np.mean(f2s)) if f2s else 0.0,
         "phone_exact_match": 0.0,
         "map_url_exact_match": 0.0,
         "location_exact_match": 0.0,
@@ -125,6 +140,8 @@ def run_task2_approach_b2_regression(
     maes = []
     rmses = []
     ems = []
+    f1s = []
+    f2s = []
     all_y_true = []
     all_y_pred = []
     
@@ -141,14 +158,19 @@ def run_task2_approach_b2_regression(
             preds = np.clip(pipe.predict(X_test), 0, None)
             
             m = compute_count_regression_metrics(y_te, preds)
+            clf_m = compute_classification_metrics(bin_count_target(y_te), bin_count_target(preds))
             maes.append(m["mae"])
             rmses.append(m["rmse"])
             ems.append(m["exact_match"])
+            f1s.append(clf_m["f1_weighted"])
+            f2s.append(clf_m["f2"])
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
             
     return {
         "approach": f"Approach B2 (Regressor {model_name})",
+        "f1": float(np.mean(f1s)) if f1s else 0.0,
+        "f2": float(np.mean(f2s)) if f2s else 0.0,
         "phone_exact_match": 0.0,
         "map_url_exact_match": 0.0,
         "location_exact_match": 0.0,
@@ -169,6 +191,8 @@ def run_task2_approach_b3_crf(test_df: pd.DataFrame) -> Dict[str, Any]:
     
     return {
         "approach": "Approach B3 (CRF Sequence Tagger)",
+        "f1": loc_m["exact_match_rate"],
+        "f2": loc_m["exact_match_rate"],
         "phone_exact_match": 0.0,
         "map_url_exact_match": 0.0,
         "location_exact_match": loc_m["exact_match_rate"],
@@ -192,6 +216,8 @@ def run_task2_approach_c_hybrid(
     
     return {
         "approach": f"Approach C (Hybrid Rules + {best_regressor_name}) ⭐",
+        "f1": res_reg["f1"],
+        "f2": res_reg["f2"],
         "phone_exact_match": res_a["phone_exact_match"],
         "map_url_exact_match": res_a["map_url_exact_match"],
         "location_exact_match": res_a["location_exact_match"],
@@ -242,6 +268,8 @@ def execute_task2_pipeline(
                 task_name="Task 2: Extraction",
                 step_name=res_dict["approach"],
                 metrics={
+                    "F1-Score": res_dict.get("f1", 0.0),
+                    "F2-Score": res_dict.get("f2", 0.0),
                     "Phone Match Rate": res_dict.get("phone_exact_match", 0.0),
                     "Location Match Rate": res_dict.get("location_exact_match", 0.0),
                     "Count MAE": res_dict.get("mean_count_mae", 0.0),
