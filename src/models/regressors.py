@@ -100,7 +100,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {k: v for k, v in kwargs.items() if k != "random_state"}
-                return cuml.linear_model.Ridge(**cp)
+                return CumlSparseToDenseAdapter(cuml.linear_model.Ridge(**cp))
             except Exception:
                 pass
         p = {"random_state": random_state, **kwargs}
@@ -110,7 +110,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"max_iter": 2000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "dual")}}
-                return cuml.svm.LinearSVR(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.LinearSVR(**cp))
             except Exception:
                 pass
         p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
@@ -120,7 +120,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"kernel": "linear", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVR(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVR(**cp))
             except Exception:
                 pass
         p = {"kernel": "linear", "max_iter": 5000, "cache_size": 1000, **kwargs}
@@ -130,7 +130,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"kernel": "rbf", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVR(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVR(**cp))
             except Exception:
                 pass
         p = {"kernel": "rbf", "max_iter": 5000, "cache_size": 1000, **kwargs}
@@ -140,7 +140,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"kernel": "poly", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVR(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVR(**cp))
             except Exception:
                 pass
         p = {"kernel": "poly", "max_iter": 5000, "cache_size": 1000, **kwargs}
@@ -150,7 +150,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"kernel": "sigmoid", "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVR(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVR(**cp))
             except Exception:
                 pass
         p = {"kernel": "sigmoid", "max_iter": 5000, "cache_size": 1000, **kwargs}
@@ -164,7 +164,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         if gpu_active:
             try:
                 cp = {"epochs": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "max_iter")}}
-                return cuml.linear_model.MBSGDRegressor(**cp)
+                return CumlSparseToDenseAdapter(cuml.linear_model.MBSGDRegressor(**cp))
             except Exception:
                 pass
         p = {"max_iter": 1000, "random_state": random_state, **kwargs}

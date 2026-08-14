@@ -20,3 +20,4 @@ ENV/
 .DS_Store
 .vscode/
 .idea/
+test_task2_out/

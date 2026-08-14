@@ -98,7 +98,7 @@ import scipy.sparse
 
 class CumlSparseToDenseAdapter:
     """
-    Adapter for cuML estimators that only accept dense float32 inputs (e.g. RandomForest, KNeighbors).
+    Adapter for cuML estimators that only accept dense float32 inputs (e.g. LinearSVC, SVC, RandomForest, KNeighbors).
     Converts sparse CSR matrix to dense np.float32 on the fly and ensures outputs are NumPy arrays.
     """
     def __init__(self, estimator):
@@ -134,7 +134,33 @@ class CumlSparseToDenseAdapter:
             X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
-        preds = self.estimator.predict_proba(X, **kwargs)
+        if hasattr(self.estimator, "predict_proba"):
+            preds = self.estimator.predict_proba(X, **kwargs)
+        elif hasattr(self.estimator, "decision_function"):
+            df = self.estimator.decision_function(X)
+            if hasattr(df, "to_numpy"):
+                df = df.to_numpy()
+            elif hasattr(df, "get"):
+                df = df.get()
+            df = np.asarray(df)
+            prob = 1.0 / (1.0 + np.exp(-df))
+            if prob.ndim == 1:
+                return np.vstack([1 - prob, prob]).T
+            return prob
+        else:
+            raise AttributeError(f"{self.estimator.__class__.__name__} has no predict_proba or decision_function")
+        if hasattr(preds, "to_numpy"):
+            preds = preds.to_numpy()
+        elif hasattr(preds, "get"):
+            preds = preds.get()
+        return np.asarray(preds)
+
+    def decision_function(self, X, **kwargs):
+        if scipy.sparse.issparse(X):
+            X = X.toarray().astype(np.float32)
+        elif isinstance(X, np.ndarray) and X.dtype != np.float32:
+            X = X.astype(np.float32)
+        preds = self.estimator.decision_function(X, **kwargs)
         if hasattr(preds, "to_numpy"):
             preds = preds.to_numpy()
         elif hasattr(preds, "get"):
@@ -161,7 +187,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"max_iter": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "n_jobs")}}
-                return cuml.linear_model.LogisticRegression(**cp)
+                return CumlSparseToDenseAdapter(cuml.linear_model.LogisticRegression(**cp))
             except Exception:
                 pass
         p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
@@ -171,7 +197,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"max_iter": 2000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "dual")}}
-                return cuml.svm.LinearSVC(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.LinearSVC(**cp))
             except Exception:
                 pass
         p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
@@ -181,7 +207,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"kernel": "linear", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVC(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVC(**cp))
             except Exception:
                 pass
         p = {"kernel": "linear", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
@@ -191,7 +217,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"kernel": "rbf", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVC(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVC(**cp))
             except Exception:
                 pass
         p = {"kernel": "rbf", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
@@ -201,7 +227,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"kernel": "poly", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVC(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVC(**cp))
             except Exception:
                 pass
         p = {"kernel": "poly", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
@@ -211,7 +237,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"kernel": "sigmoid", "probability": True, "max_iter": 5000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "cache_size")}}
-                return cuml.svm.SVC(**cp)
+                return CumlSparseToDenseAdapter(cuml.svm.SVC(**cp))
             except Exception:
                 pass
         p = {"kernel": "sigmoid", "probability": True, "max_iter": 5000, "cache_size": 1000, "random_state": random_state, **kwargs}
@@ -221,7 +247,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {k: v for k, v in kwargs.items() if k != "random_state"}
-                return cuml.linear_model.Ridge(**cp)
+                return CumlSparseToDenseAdapter(cuml.linear_model.Ridge(**cp))
             except Exception:
                 pass
         p = {"random_state": random_state, **kwargs}
@@ -235,7 +261,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         if gpu_active:
             try:
                 cp = {"epochs": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "n_jobs", "max_iter")}}
-                return cuml.linear_model.MBSGDClassifier(**cp)
+                return CumlSparseToDenseAdapter(cuml.linear_model.MBSGDClassifier(**cp))
             except Exception:
                 pass
         p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
