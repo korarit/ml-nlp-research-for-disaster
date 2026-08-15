@@ -7,6 +7,7 @@ Approach B3 (CRF Tagger), and Approach C (Hybrid System) on Gemini CV and Luna H
 import os
 import gc
 import json
+import pickle
 import torch
 import numpy as np
 import pandas as pd
@@ -627,43 +628,89 @@ def execute_task2_pipeline(
     token_cache = prepare_task2_token_cache(train_df, test_df)
     print(f"--- [Task 2] Token Matrix ready: train={token_cache['X_train_mat'].shape}, test={token_cache['X_test_mat'].shape} ---")
 
-    # Pre-train Standard LSTM once for Entity Extraction across Approaches B1, B2
-    print("--- [Task 2] Training Standard LSTM Sequence Tagger on GPU/CPU ---")
-    lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
-    lstm_tagger.fit(
-        train_df["generated_text"].tolist(),
-        extract_gt_entity_vector(train_df, "gt_location_name"),
-        extract_gt_entity_vector(train_df, "gt_victim_phone"),
-        extract_gt_entity_vector(train_df, "gt_google_map_url"),
-        train_df.get("gt_lat", [None] * len(train_df)).tolist(),
-        train_df.get("gt_lng", [None] * len(train_df)).tolist(),
-        extract_gt_entity_vector(train_df, "gt_victim_name"),
-        extract_gt_entity_vector(train_df, "gt_reporter_name")
-    )
-    X_train_lstm_sent = lstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
-    X_test_lstm_sent = lstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
-    X_train_lstm_combined = sp.hstack([X_train_vec, X_train_lstm_sent], format="csr")
-    X_test_lstm_combined = sp.hstack([X_test_vec, X_test_lstm_sent], format="csr")
-    lstm_token_cache = lstm_tagger.prepare_token_feature_cache(train_df, test_df)
+    # Models & Feature Checkpoints directory
+    models_dir = os.path.join(output_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Pre-train / Load Standard LSTM once for Entity Extraction across Approaches B1, B2
+    lstm_model_path = os.path.join(models_dir, "standard_lstm_tagger.pt")
+    lstm_cache_path = os.path.join(models_dir, "standard_lstm_features.pkl")
+    
+    if os.path.exists(lstm_model_path) and os.path.exists(lstm_cache_path) and not force:
+        print(f"--- [Task 2] Loading cached Standard LSTM model & features from {models_dir} (Skipping training) ---")
+        lstm_tagger = Standard_LSTM_Tagger.load(lstm_model_path, use_gpu=use_gpu)
+        with open(lstm_cache_path, "rb") as f:
+            lstm_cache_data = pickle.load(f)
+            X_train_lstm_combined = lstm_cache_data["X_train_lstm_combined"]
+            X_test_lstm_combined = lstm_cache_data["X_test_lstm_combined"]
+            lstm_token_cache = lstm_cache_data["lstm_token_cache"]
+    else:
+        print("--- [Task 2] Training Standard LSTM Sequence Tagger on GPU/CPU ---")
+        lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
+        lstm_tagger.fit(
+            train_df["generated_text"].tolist(),
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        X_train_lstm_sent = lstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
+        X_test_lstm_sent = lstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
+        X_train_lstm_combined = sp.hstack([X_train_vec, X_train_lstm_sent], format="csr")
+        X_test_lstm_combined = sp.hstack([X_test_vec, X_test_lstm_sent], format="csr")
+        lstm_token_cache = lstm_tagger.prepare_token_feature_cache(train_df, test_df)
+        
+        lstm_tagger.save(lstm_model_path)
+        with open(lstm_cache_path, "wb") as f:
+            pickle.dump({
+                "X_train_lstm_combined": X_train_lstm_combined,
+                "X_test_lstm_combined": X_test_lstm_combined,
+                "lstm_token_cache": lstm_token_cache
+            }, f)
+        print(f"--- [Task 2] Standard LSTM model & features saved to {models_dir} ---")
 
-    # Pre-train BiLSTM-CRF once for Entity Extraction across Approaches B3, B4
-    print("--- [Task 2] Training BiLSTM-CRF Sequence Tagger on GPU/CPU ---")
-    bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
-    bilstm_tagger.fit(
-        train_df["generated_text"].tolist(),
-        extract_gt_entity_vector(train_df, "gt_location_name"),
-        extract_gt_entity_vector(train_df, "gt_victim_phone"),
-        extract_gt_entity_vector(train_df, "gt_google_map_url"),
-        train_df.get("gt_lat", [None] * len(train_df)).tolist(),
-        train_df.get("gt_lng", [None] * len(train_df)).tolist(),
-        extract_gt_entity_vector(train_df, "gt_victim_name"),
-        extract_gt_entity_vector(train_df, "gt_reporter_name")
-    )
-    X_train_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
-    X_test_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
-    X_train_bilstm_combined = sp.hstack([X_train_vec, X_train_bilstm_sent], format="csr")
-    X_test_bilstm_combined = sp.hstack([X_test_vec, X_test_bilstm_sent], format="csr")
-    bilstm_token_cache = bilstm_tagger.prepare_token_feature_cache(train_df, test_df)
+    # Pre-train / Load BiLSTM-CRF once for Entity Extraction across Approaches B3, B4
+    bilstm_model_path = os.path.join(models_dir, "bilstm_crf_tagger.pt")
+    bilstm_cache_path = os.path.join(models_dir, "bilstm_crf_features.pkl")
+    
+    if os.path.exists(bilstm_model_path) and os.path.exists(bilstm_cache_path) and not force:
+        print(f"--- [Task 2] Loading cached BiLSTM-CRF model & features from {models_dir} (Skipping training) ---")
+        bilstm_tagger = BiLSTM_CRF_Tagger.load(bilstm_model_path, use_gpu=use_gpu)
+        with open(bilstm_cache_path, "rb") as f:
+            bilstm_cache_data = pickle.load(f)
+            X_train_bilstm_combined = bilstm_cache_data["X_train_bilstm_combined"]
+            X_test_bilstm_combined = bilstm_cache_data["X_test_bilstm_combined"]
+            bilstm_token_cache = bilstm_cache_data["bilstm_token_cache"]
+    else:
+        print("--- [Task 2] Training BiLSTM-CRF Sequence Tagger on GPU/CPU ---")
+        bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+        bilstm_tagger.fit(
+            train_df["generated_text"].tolist(),
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        X_train_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
+        X_test_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
+        X_train_bilstm_combined = sp.hstack([X_train_vec, X_train_bilstm_sent], format="csr")
+        X_test_bilstm_combined = sp.hstack([X_test_vec, X_test_bilstm_sent], format="csr")
+        bilstm_token_cache = bilstm_tagger.prepare_token_feature_cache(train_df, test_df)
+        
+        bilstm_tagger.save(bilstm_model_path)
+        with open(bilstm_cache_path, "wb") as f:
+            pickle.dump({
+                "X_train_bilstm_combined": X_train_bilstm_combined,
+                "X_test_bilstm_combined": X_test_bilstm_combined,
+                "bilstm_token_cache": bilstm_token_cache
+            }, f)
+        print(f"--- [Task 2] BiLSTM-CRF model & features saved to {models_dir} ---")
 
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")

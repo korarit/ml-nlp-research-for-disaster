@@ -4,6 +4,7 @@ NER Tagger Suite implementing:
 2. PyTorch GPU BiLSTM-CRF Tagger with Viterbi Decoding (Section 3.3 Item 23 & Task 3.1)
 """
 
+import os
 import gc
 import torch
 import torch.nn as nn
@@ -1096,6 +1097,47 @@ class BiLSTM_CRF_Tagger:
             "reporter_names": pred_rep_names
         }
 
+    def save(self, filepath: str):
+        """Saves BiLSTM-CRF model weights, vocabulary, tags, and configuration to disk."""
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        checkpoint = {
+            "model_type": "BiLSTM_CRF_Tagger",
+            "state_dict": self.model.state_dict() if self.model is not None else None,
+            "word_to_ix": self.word_to_ix,
+            "tag_to_ix": self.tag_to_ix,
+            "embedding_dim": self.embedding_dim,
+            "hidden_dim": self.hidden_dim,
+            "epochs": self.epochs,
+            "lr": self.lr
+        }
+        torch.save(checkpoint, filepath)
+
+    @classmethod
+    def load(cls, filepath: str, use_gpu: bool = True) -> "BiLSTM_CRF_Tagger":
+        """Loads BiLSTM-CRF model from disk."""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"BiLSTM-CRF checkpoint not found: {filepath}")
+        checkpoint = torch.load(filepath, map_location="cpu", weights_only=False)
+        tagger = cls(
+            embedding_dim=checkpoint.get("embedding_dim", 64),
+            hidden_dim=checkpoint.get("hidden_dim", 64),
+            epochs=checkpoint.get("epochs", 8),
+            lr=checkpoint.get("lr", 0.01),
+            use_gpu=use_gpu
+        )
+        tagger.word_to_ix = checkpoint["word_to_ix"]
+        tagger.tag_to_ix = checkpoint["tag_to_ix"]
+        if checkpoint.get("state_dict") is not None:
+            tagger.model = BiLSTM_CRF_PyTorch(
+                vocab_size=len(tagger.word_to_ix),
+                tag_to_ix=tagger.tag_to_ix,
+                embedding_dim=tagger.embedding_dim,
+                hidden_dim=tagger.hidden_dim
+            ).to(tagger.device)
+            tagger.model.load_state_dict(checkpoint["state_dict"])
+            tagger.model.eval()
+        return tagger
+
 
 class Standard_LSTM_PyTorch(nn.Module):
     """
@@ -1446,5 +1488,47 @@ class Standard_LSTM_Tagger:
             "victim_names": pred_vic_names,
             "reporter_names": pred_rep_names
         }
+
+    def save(self, filepath: str):
+        """Saves Standard LSTM model weights, vocabulary, tags, and configuration to disk."""
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        checkpoint = {
+            "model_type": "Standard_LSTM_Tagger",
+            "state_dict": self.model.state_dict() if self.model is not None else None,
+            "word_to_ix": self.word_to_ix,
+            "tag_to_ix": self.tag_to_ix,
+            "embedding_dim": self.embedding_dim,
+            "hidden_dim": self.hidden_dim,
+            "epochs": self.epochs,
+            "lr": self.lr
+        }
+        torch.save(checkpoint, filepath)
+
+    @classmethod
+    def load(cls, filepath: str, use_gpu: bool = True) -> "Standard_LSTM_Tagger":
+        """Loads Standard LSTM model from disk."""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Standard LSTM checkpoint not found: {filepath}")
+        checkpoint = torch.load(filepath, map_location="cpu", weights_only=False)
+        tagger = cls(
+            embedding_dim=checkpoint.get("embedding_dim", 64),
+            hidden_dim=checkpoint.get("hidden_dim", 64),
+            epochs=checkpoint.get("epochs", 8),
+            lr=checkpoint.get("lr", 0.01),
+            use_gpu=use_gpu
+        )
+        tagger.word_to_ix = checkpoint["word_to_ix"]
+        tagger.tag_to_ix = checkpoint["tag_to_ix"]
+        if checkpoint.get("state_dict") is not None:
+            tagger.model = Standard_LSTM_PyTorch(
+                vocab_size=len(tagger.word_to_ix),
+                tag_to_ix=tagger.tag_to_ix,
+                embedding_dim=tagger.embedding_dim,
+                hidden_dim=tagger.hidden_dim
+            ).to(tagger.device)
+            tagger.model.load_state_dict(checkpoint["state_dict"])
+            tagger.model.eval()
+        return tagger
+
 
 
