@@ -182,6 +182,26 @@ class ThaiLocationCRFTagger:
         return extracted_locations
 
 
+import re
+
+
+def clean_extracted_span(span_str: str, target_type: str) -> str:
+    """Cleans and normalizes extracted entity strings for standardized string matching."""
+    if not span_str:
+        return ""
+    res = str(span_str).strip()
+    if target_type == "COORDS":
+        # Remove leading keywords (e.g. พิกัด, ละติจูด, ลองจิจูด)
+        res = re.sub(r"^(?:พิกัด|ละติจูด|ลองจิจูด|ตำแหน่ง|coords?|lat/lng)[:\s]*", "", res, flags=re.IGNORECASE).strip()
+        # Normalize whitespace around comma: "13.4553, 100.6719" -> "13.4553,100.6719"
+        res = re.sub(r"\s*,\s*", ",", res)
+    elif target_type == "PHONE":
+        res = re.sub(r"^(?:เบอร์โทรศัพท์|เบอร์โทร|โทร|เบอร์|tel|phone)[:\s]*", "", res, flags=re.IGNORECASE).strip()
+    elif target_type == "URL":
+        res = res.strip("., \t\r\n")
+    return res
+
+
 class ThaiMultiNER_CRFTagger:
     """
     Pure Machine Learning Multi-Entity Sequence Tagger for Location, Phone, Map URL, Coordinates, Victim Name, and Reporter Name.
@@ -325,7 +345,8 @@ class ThaiMultiNER_CRFTagger:
                 if idx:
                     s_c = spans[idx[0]][0]
                     e_c = spans[idx[-1]][1]
-                    return text_str[s_c:e_c].strip()
+                    raw_span = text_str[s_c:e_c].strip()
+                    return clean_extracted_span(raw_span, target_type)
                 return ""
                 
             pred_locs.append(extract_span("LOC"))
@@ -567,7 +588,8 @@ class SlidingWindowTokenClassifier:
                 if idx:
                     s_c = spans[idx[0]][0]
                     e_c = spans[idx[-1]][1]
-                    return t_str[s_c:e_c].strip()
+                    raw_span = t_str[s_c:e_c].strip()
+                    return clean_extracted_span(raw_span, target_type)
                 return ""
                 
             pred_locs.append(extract_span("LOC"))
@@ -669,7 +691,8 @@ class SlidingWindowTokenClassifier:
                 if idx:
                     s_c = spans[idx[0]][0]
                     e_c = spans[idx[-1]][1]
-                    return text_str[s_c:e_c].strip()
+                    raw_span = text_str[s_c:e_c].strip()
+                    return clean_extracted_span(raw_span, target_type)
                 return ""
                 
             pred_locs.append(extract_span("LOC"))
@@ -852,7 +875,8 @@ class BiLSTM_CRF_Tagger:
                     if idx:
                         s_c = spans[idx[0]][0]
                         e_c = spans[idx[-1]][1]
-                        return text_str[s_c:e_c].strip()
+                        raw_span = text_str[s_c:e_c].strip()
+                        return clean_extracted_span(raw_span, target_type)
                     return ""
                     
                 pred_locs.append(extract_span("LOC"))

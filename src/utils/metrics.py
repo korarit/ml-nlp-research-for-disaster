@@ -198,13 +198,19 @@ def levenshtein_distance(s1: str, s2: str) -> int:
     return previous_row[-1]
 
 
+import re
+
+
 def sanitize_string_val(val: Any) -> str:
-    """Helper to clean string values, turning NaN / None / 'nan' / '0.0,0.0' into empty string."""
+    """Helper to clean string values, turning NaN / None / 'nan' / '0.0,0.0' into empty string and normalizing comma whitespace."""
     if val is None or pd.isna(val):
         return ""
     s = str(val).strip()
     if s.lower() in ("nan", "none", "null", "0.0,0.0", "0.0, 0.0"):
         return ""
+    if "," in s:
+        s = re.sub(r"^(?:พิกัด|ละติจูด|ลองจิจูด|ตำแหน่ง|coords?|lat/lng)[:\s]*", "", s, flags=re.IGNORECASE).strip()
+        s = re.sub(r"\s*,\s*", ",", s)
     return s
 
 
