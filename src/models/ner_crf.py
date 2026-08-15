@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
+import scipy.sparse
 from typing import List, Dict, Tuple, Any, Optional
 
 try:
