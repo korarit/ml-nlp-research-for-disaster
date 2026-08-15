@@ -232,7 +232,7 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return AdaBoostRegressor(**p)
         
     elif m == "GradientBoostingRegressor":
-        p = {"random_state": random_state, **kwargs}
+        p = {"max_features": "sqrt", "random_state": random_state, **kwargs}
         return GradientBoostingRegressor(**p)
         
     elif m == "XGBRegressor":

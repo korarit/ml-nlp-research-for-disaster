@@ -392,7 +392,7 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return AdaBoostClassifier(**p)
         
     elif m == "GradientBoostingClassifier":
-        p = {"random_state": random_state, **kwargs}
+        p = {"max_features": "sqrt", "random_state": random_state, **kwargs}
         return GradientBoostingClassifier(**p)
         
     elif m == "XGBClassifier":

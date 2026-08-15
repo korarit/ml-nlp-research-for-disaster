@@ -512,7 +512,10 @@ class SlidingWindowTokenClassifier:
         self.model_name = model_name
         self.use_gpu = use_gpu
         self.vectorizer = DictVectorizer(sparse=True)
-        self.clf = get_classifier(model_name, use_gpu=use_gpu)
+        clf_kwargs = {}
+        if model_name in ("GradientBoostingClassifier", "AdaBoostClassifier"):
+            clf_kwargs["n_estimators"] = 30
+        self.clf = get_classifier(model_name, use_gpu=use_gpu, **clf_kwargs)
         self.multi_ner_helper = ThaiMultiNER_CRFTagger()
         self.label_encoder = LabelEncoder()
 
@@ -524,12 +527,12 @@ class SlidingWindowTokenClassifier:
         y_arr = np.asarray(y_tr)
         
         # Entity-Preserving Subsampling: Keep 100% of all entity tokens, balance background 'O' tokens
-        if len(y_arr) > 40000:
+        if len(y_arr) > 15000:
             ent_indices = np.where(y_arr != "O")[0]
             o_indices = np.where(y_arr == "O")[0]
             
             rng = np.random.RandomState(42)
-            n_o_sample = min(len(o_indices), max(len(ent_indices) * 2, 25000))
+            n_o_sample = min(len(o_indices), max(len(ent_indices) * 3, 10000))
             sampled_o = rng.choice(o_indices, size=n_o_sample, replace=False)
             
             keep_idx = np.sort(np.concatenate([ent_indices, sampled_o]))
