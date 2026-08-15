@@ -5,7 +5,9 @@ Approach B3 (CRF Tagger), and Approach C (Hybrid System) on Gemini CV and Luna H
 """
 
 import os
+import gc
 import json
+import torch
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Optional, Tuple
@@ -755,6 +757,10 @@ def execute_task2_pipeline(
                 notify_step(res_b1)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b1_name}: {e}")
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
     
     # 3. Approach B2 (Regressors benchmark with Standard LSTM Feature Extractor)
     reg_predictions = {}
@@ -778,6 +784,10 @@ def execute_task2_pipeline(
                 notify_step(res_b2)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b2_name}: {e}")
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
 
     # 4. Approach B3 (Binned Classifiers with BiLSTM-CRF Feature Extractor)
     for clf_name in clf_models:
@@ -797,6 +807,10 @@ def execute_task2_pipeline(
                 notify_step(res_b3)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b3_name}: {e}")
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
 
     # 5. Approach B4 (Regressors benchmark with BiLSTM-CRF Feature Extractor)
     for r_name in reg_models:
@@ -816,6 +830,10 @@ def execute_task2_pipeline(
                 notify_step(res_b4)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b4_name}: {e}")
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
         
     # 6. Approach C (Hybrid System) - Evaluate Hybrid Matrix across all Regressors with best Sequence Tagger
     best_pred_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
@@ -838,6 +856,10 @@ def execute_task2_pipeline(
                 notify_step(res_c)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_c_name}: {e}")
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
     
     # Wilcoxon Residual test on regression models
     if y_true_all is not None:

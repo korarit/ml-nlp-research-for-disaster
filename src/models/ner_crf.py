@@ -4,6 +4,7 @@ NER Tagger Suite implementing:
 2. PyTorch GPU BiLSTM-CRF Tagger with Viterbi Decoding (Section 3.3 Item 23 & Task 3.1)
 """
 
+import gc
 import torch
 import torch.nn as nn
 import numpy as np
@@ -833,23 +834,46 @@ class BiLSTM_CRF_Tagger:
         
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         
-        # Train loop
+        # Train loop with CUDA OOM safety
         self.model.train()
-        for epoch in range(self.epochs):
-            for tokens, tags in zip(tokenized_sents, tagged_sents):
-                if not tokens:
-                    continue
-                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
-                tag_idxs = [self.tag_to_ix[t] for t in tags]
-                
-                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
-                seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
-                
-                self.model.zero_grad()
-                loss = self.model.loss(seq_in, seq_targets)
-                loss.backward()
-                optimizer.step()
-                
+        try:
+            for epoch in range(self.epochs):
+                for tokens, tags in zip(tokenized_sents, tagged_sents):
+                    if not tokens:
+                        continue
+                    idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                    tag_idxs = [self.tag_to_ix[t] for t in tags]
+                    
+                    seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                    seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                    
+                    self.model.zero_grad()
+                    loss = self.model.loss(seq_in, seq_targets)
+                    loss.backward()
+                    optimizer.step()
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            print(f"Warning: GPU CUDA OOM during BiLSTM-CRF training ({e}). Falling back to CPU.")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            self.device = torch.device("cpu")
+            self.model = self.model.to(self.device)
+            self.model.train()
+            for epoch in range(max(1, self.epochs // 2)):
+                for tokens, tags in zip(tokenized_sents, tagged_sents):
+                    if not tokens:
+                        continue
+                    idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                    tag_idxs = [self.tag_to_ix[t] for t in tags]
+                    seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                    seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                    self.model.zero_grad()
+                    loss = self.model.loss(seq_in, seq_targets)
+                    loss.backward()
+                    optimizer.step()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
         return self
 
     def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
@@ -998,10 +1022,11 @@ class BiLSTM_CRF_Tagger:
         y_tr = np.array(y_train_tags) if y_train_tags else np.array([])
         X_te = np.array(X_test_tokens, dtype=np.float32) if X_test_tokens else np.zeros((0, self.hidden_dim), dtype=np.float32)
         
-        if len(y_tr) > 15000:
+        # OOM Protection: Subsample background "O" tokens to keep downstream ML classifier training memory < 50MB and fast (<2s)
+        if len(y_tr) > 6000:
             ent_idx = np.where(y_tr != "O")[0]
             o_idx = np.where(y_tr == "O")[0]
-            n_o = min(len(o_idx), max(len(ent_idx) * 3, 10000))
+            n_o = min(len(o_idx), max(len(ent_idx) * 2, 4000))
             np.random.seed(42)
             sub_o = np.random.choice(o_idx, size=n_o, replace=False)
             keep_idx = np.sort(np.concatenate([ent_idx, sub_o]))
@@ -1017,13 +1042,20 @@ class BiLSTM_CRF_Tagger:
         }
 
     def predict_entities_from_classifier(self, clf: Any, token_cache: Dict[str, Any]) -> Dict[str, List[str]]:
-        """Uses a trained Classical Classifier to classify BiLSTM token embeddings into BIO tags."""
+        """Uses a trained Classical Classifier to classify BiLSTM token embeddings into BIO tags with batching."""
         test_texts = token_cache["test_texts"]
         n_test = len(test_texts)
         if len(token_cache["X_test"]) == 0:
             return {"locations": [""] * n_test, "phones": [""] * n_test, "urls": [""] * n_test, "coords": [""] * n_test, "victim_names": [""] * n_test, "reporter_names": [""] * n_test}
             
-        pred_tags = clf.predict(token_cache["X_test"])
+        # Batched prediction for memory safety
+        X_test_mat = token_cache["X_test"]
+        if len(X_test_mat) > 5000:
+            pred_tags = []
+            for b_start in range(0, len(X_test_mat), 2000):
+                pred_tags.extend(clf.predict(X_test_mat[b_start:b_start + 2000]))
+        else:
+            pred_tags = clf.predict(X_test_mat)
         
         doc_spans = {i: [] for i in range(n_test)}
         for (t_idx, s, e, tok), tag in zip(token_cache["test_meta"], pred_tags):
@@ -1152,21 +1184,47 @@ class Standard_LSTM_Tagger:
         ).to(self.device)
         
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        
+        # Train loop with CUDA OOM safety
         self.model.train()
-        for epoch in range(self.epochs):
-            for tokens, tags in zip(tokenized_sents, tagged_sents):
-                if not tokens:
-                    continue
-                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
-                tag_idxs = [self.tag_to_ix[t] for t in tags]
-                
-                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
-                seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
-                
-                self.model.zero_grad()
-                loss = self.model.loss(seq_in, seq_targets)
-                loss.backward()
-                optimizer.step()
+        try:
+            for epoch in range(self.epochs):
+                for tokens, tags in zip(tokenized_sents, tagged_sents):
+                    if not tokens:
+                        continue
+                    idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                    tag_idxs = [self.tag_to_ix[t] for t in tags]
+                    
+                    seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                    seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                    
+                    self.model.zero_grad()
+                    loss = self.model.loss(seq_in, seq_targets)
+                    loss.backward()
+                    optimizer.step()
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            print(f"Warning: GPU CUDA OOM during Standard LSTM training ({e}). Falling back to CPU.")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            self.device = torch.device("cpu")
+            self.model = self.model.to(self.device)
+            self.model.train()
+            for epoch in range(max(1, self.epochs // 2)):
+                for tokens, tags in zip(tokenized_sents, tagged_sents):
+                    if not tokens:
+                        continue
+                    idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                    tag_idxs = [self.tag_to_ix[t] for t in tags]
+                    seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                    seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                    self.model.zero_grad()
+                    loss = self.model.loss(seq_in, seq_targets)
+                    loss.backward()
+                    optimizer.step()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
         return self
 
     def extract_sentence_embeddings(self, texts: List[str]) -> np.ndarray:
@@ -1252,10 +1310,11 @@ class Standard_LSTM_Tagger:
         y_tr = np.array(y_train_tags) if y_train_tags else np.array([])
         X_te = np.array(X_test_tokens, dtype=np.float32) if X_test_tokens else np.zeros((0, self.hidden_dim), dtype=np.float32)
         
-        if len(y_tr) > 15000:
+        # OOM Protection: Subsample background "O" tokens to keep downstream ML classifier training memory < 50MB and fast (<2s)
+        if len(y_tr) > 6000:
             ent_idx = np.where(y_tr != "O")[0]
             o_idx = np.where(y_tr == "O")[0]
-            n_o = min(len(o_idx), max(len(ent_idx) * 3, 10000))
+            n_o = min(len(o_idx), max(len(ent_idx) * 2, 4000))
             np.random.seed(42)
             sub_o = np.random.choice(o_idx, size=n_o, replace=False)
             keep_idx = np.sort(np.concatenate([ent_idx, sub_o]))
@@ -1271,13 +1330,20 @@ class Standard_LSTM_Tagger:
         }
 
     def predict_entities_from_classifier(self, clf: Any, token_cache: Dict[str, Any]) -> Dict[str, List[str]]:
-        """Uses a trained Classical Classifier to classify LSTM token embeddings into BIO tags."""
+        """Uses a trained Classical Classifier to classify LSTM token embeddings into BIO tags with batching."""
         test_texts = token_cache["test_texts"]
         n_test = len(test_texts)
         if len(token_cache["X_test"]) == 0:
             return {"locations": [""] * n_test, "phones": [""] * n_test, "urls": [""] * n_test, "coords": [""] * n_test, "victim_names": [""] * n_test, "reporter_names": [""] * n_test}
             
-        pred_tags = clf.predict(token_cache["X_test"])
+        # Batched prediction for memory safety
+        X_test_mat = token_cache["X_test"]
+        if len(X_test_mat) > 5000:
+            pred_tags = []
+            for b_start in range(0, len(X_test_mat), 2000):
+                pred_tags.extend(clf.predict(X_test_mat[b_start:b_start + 2000]))
+        else:
+            pred_tags = clf.predict(X_test_mat)
         
         doc_spans = {i: [] for i in range(n_test)}
         for (t_idx, s, e, tok), tag in zip(token_cache["test_meta"], pred_tags):
