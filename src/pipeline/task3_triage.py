@@ -17,6 +17,7 @@ from src.utils.data_loader import load_all_datasets, extract_triage_data_by_age,
 from src.features.text_vectorizer import create_tfidf_vectorizer
 from src.models.classifiers import get_classifier, ALL_CLASSIFIER_NAMES
 from src.models.rules_engine import PediatricIITTRules, AdultIITTRules, ClauseSplitterRules
+from src.models.ner_crf import ThaiMultiNER_CRFTagger, BiLSTM_CRF_Tagger
 from src.utils.metrics import compute_triage_clinical_metrics, compute_string_match_metrics
 from src.utils.statistical_tests import run_pairwise_model_stat_tests
 from src.utils.visualization import plot_02_model_performance_comparison
@@ -24,7 +25,7 @@ from src.utils.visualization import plot_02_model_performance_comparison
 
 def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Subtask 3.1: Rules-based People Entity & Symptom Literal Extraction benchmark.
+    Subtask 3.1 (Method 3.1a): Rules-based People Entity & Symptom Literal Extraction benchmark.
     Evaluates Precision, Recall, F1, and Match Rate on victim symptom clauses.
     """
     splitter = ClauseSplitterRules()
@@ -58,7 +59,85 @@ def run_subtask_3_1_people_extraction(test_df: pd.DataFrame) -> Dict[str, Any]:
     f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
     
     return {
-        "model": "ClauseSplitterRules",
+        "model": "Method 3.1a (ClauseSplitterRules)",
+        "task": "People Extraction (3.1)",
+        "triage_accuracy": float(f1),
+        "f1_weighted": float(f1),
+        "f2_weighted": float(f1),
+        "qwk": float(f1),
+        "under_triage_rate": 0.0,
+        "critical_under_triage_rate": 0.0,
+        "over_triage_rate": 0.0
+    }
+
+
+def run_subtask_3_1_ml_people_extraction(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    model_name: str = "CRF",
+    use_gpu: bool = True
+) -> Dict[str, Any]:
+    """
+    Subtask 3.1 (Method 3.1b): Pure Machine Learning Sequence Tagger (CRF / BiLSTM-CRF)
+    for extracting individual victim names and symptoms from raw texts.
+    """
+    train_texts = train_df["generated_text"].tolist()
+    train_locs = [str(x or "") for x in train_df.get("gt_location_name", [])]
+    train_phones = [str(x or "") for x in train_df.get("gt_victim_phone", [])]
+    train_urls = [str(x or "") for x in train_df.get("gt_google_map_url", [])]
+    train_lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
+    train_lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
+    train_vics = [str(x or "") for x in train_df.get("gt_victim_name", [])]
+    train_reps = [str(x or "") for x in train_df.get("gt_reporter_name", [])]
+    
+    if model_name in ("BiLSTM-CRF", "BiLSTM_CRF", "BiLSTM"):
+        tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+    else:
+        tagger = ThaiMultiNER_CRFTagger()
+        
+    tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
+    
+    test_texts = test_df["generated_text"].tolist()
+    preds = tagger.predict_entities(test_texts)
+    pred_vic_names = preds.get("victim_names", [""] * len(test_texts))
+    
+    tp, fp, fn = 0, 0, 0
+    for i, (_, row) in enumerate(test_df.iterrows()):
+        victims, victims_adult = extract_triage_data_by_age(pd.DataFrame([row]))
+        valid_dfs = [d for d in [victims, victims_adult] if not d.empty]
+        all_vic = pd.concat(valid_dfs, ignore_index=True) if valid_dfs else pd.DataFrame()
+        
+        has_gt_victims = len(all_vic) > 0
+        pred_vic = str(pred_vic_names[i]).strip().lower()
+        has_pred = bool(pred_vic and pred_vic not in ("nan", "none", "null", ""))
+        
+        if has_gt_victims:
+            matched = False
+            for _, vic in all_vic.iterrows():
+                gt_name = str(vic.get("name", "")).strip().lower()
+                gt_sym = str(vic.get("symptoms_literal", "")).strip().lower()
+                if has_pred and (gt_name and (gt_name in pred_vic or pred_vic in gt_name)):
+                    matched = True
+                    break
+                elif has_pred and (gt_sym and (gt_sym in pred_vic or pred_vic in gt_sym)):
+                    matched = True
+                    break
+            if matched:
+                tp += 1
+            else:
+                if has_pred:
+                    fp += 1
+                fn += 1
+        else:
+            if has_pred:
+                fp += 1
+                
+    prec = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
+    
+    return {
+        "model": f"Method 3.1b (ML {model_name})",
         "task": "People Extraction (3.1)",
         "triage_accuracy": float(f1),
         "f1_weighted": float(f1),
@@ -177,15 +256,29 @@ def execute_task3_pipeline(
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)
     
     # -------------------------------------------------------------
-    # Sub-task 3.1: People Extraction (Separating Victims & Symptoms)
+    # Sub-task 3.1: People Extraction (Method 3.1a Rules vs Method 3.1b Pure ML)
     # -------------------------------------------------------------
-    key_3_1 = "ClauseSplitterRules"
-    if not should_skip(key_3_1):
-        print(f"--- Task 3.1 Running: {key_3_1} ---")
-        res_3_1 = run_subtask_3_1_people_extraction(test_df)
-        results.append(res_3_1)
+    # Method 3.1a: Rule-based Clause Splitter
+    key_3_1_rules = "Method 3.1a (ClauseSplitterRules)"
+    if not should_skip(key_3_1_rules) and not should_skip("ClauseSplitterRules"):
+        print(f"--- Task 3.1 Running: {key_3_1_rules} ---")
+        res_3_1_r = run_subtask_3_1_people_extraction(test_df)
+        results.append(res_3_1_r)
         pd.DataFrame(results).to_csv(task3_csv, index=False)
-        notify_step("Task 3.1: People Extraction", "ClauseSplitterRules", res_3_1)
+        notify_step("Task 3.1: People Extraction", key_3_1_rules, res_3_1_r)
+        
+    # Method 3.1b: Pure ML Sequence Taggers (CRF & BiLSTM-CRF)
+    for ml_name in ["CRF", "BiLSTM-CRF"]:
+        key_3_1_ml = f"Method 3.1b (ML {ml_name})"
+        if not should_skip(key_3_1_ml):
+            print(f"--- Task 3.1 Running: {key_3_1_ml} ---")
+            try:
+                res_3_1_ml = run_subtask_3_1_ml_people_extraction(train_df, test_df, model_name=ml_name, use_gpu=use_gpu)
+                results.append(res_3_1_ml)
+                pd.DataFrame(results).to_csv(task3_csv, index=False)
+                notify_step("Task 3.1: People Extraction", key_3_1_ml, res_3_1_ml)
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {key_3_1_ml}: {e}")
     
     # -------------------------------------------------------------
     # Sub-task 3.2: Pediatric Triage Classification (Child <= 12)
