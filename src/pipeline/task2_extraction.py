@@ -342,64 +342,83 @@ def run_task2_approach_b2_regression(
     }, np.array(all_y_true), np.array(all_y_pred), preds_entities
 
 
-def run_task2_approach_b3_token_tagger(
+def run_task2_approach_b3_binned_bilstm_crf(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
-    model_name: str = "CRF",
+    model_name: str = "LogisticRegression",
     use_gpu: bool = True,
+    X_train_vec: Optional[Any] = None,
+    X_test_vec: Optional[Any] = None,
+    bilstm_tagger: Optional[BiLSTM_CRF_Tagger] = None,
+    bilstm_token_cache: Optional[Dict[str, Any]] = None,
     token_cache: Optional[Dict[str, Any]] = None
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """
-    Evaluates Approach B3: Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coordinates).
-    Supports:
-    1. "CRF": sklearn-crfsuite CRF
-    2. "BiLSTM-CRF": PyTorch GPU BiLSTM-CRF
-    3. Any Task 1 Classifier (e.g. "LogisticRegression", "RandomForestClassifier", "XGBClassifier", etc.) via Sliding Window.
+    Evaluates Approach B3: BiLSTM-CRF Sequence Extractor -> Classical ML Classifiers (17 Models) for Counts and Entity Tokens.
     """
-    train_texts = train_df["generated_text"].tolist()
-    train_locs = extract_gt_entity_vector(train_df, "gt_location_name")
-    train_phones = extract_gt_entity_vector(train_df, "gt_victim_phone")
-    train_urls = extract_gt_entity_vector(train_df, "gt_google_map_url")
-    train_lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
-    train_lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
-    train_vics = extract_gt_entity_vector(train_df, "gt_victim_name")
-    train_reps = extract_gt_entity_vector(train_df, "gt_reporter_name")
-
-    if model_name in ("CRF", "CRF_LBFGS"):
-        tagger = ThaiMultiNER_CRFTagger()
-        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
-        test_texts = test_df["generated_text"].tolist()
-        preds = tagger.predict_entities(test_texts)
-    elif model_name in ("LSTM", "Standard_LSTM", "StandardLSTM"):
-        tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
-        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
-        test_texts = test_df["generated_text"].tolist()
-        preds = tagger.predict_entities(test_texts)
-    elif model_name in ("BiLSTM-CRF", "BiLSTM_CRF", "BiLSTM"):
-        tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
-        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
-        test_texts = test_df["generated_text"].tolist()
-        preds = tagger.predict_entities(test_texts)
-    else:
-        tagger = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
-        if token_cache is not None:
-            preds = tagger.fit_and_predict_cached(token_cache)
-        else:
-            tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
-            test_texts = test_df["generated_text"].tolist()
-            preds = tagger.predict_entities(test_texts)
+    if X_train_vec is None or X_test_vec is None:
+        vectorizer = create_tfidf_vectorizer(use_hybrid=True)
+        X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
+        X_test_vec = vectorizer.transform(test_df["generated_text"].values)
     
-    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds["locations"])
-    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds["phones"])
-    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds["urls"])
-    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds["coords"])
-    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds["victim_names"])
-    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds["reporter_names"])
+    # 1. Classical Classifier for Counts
+    maes, rmses, ems, f1s, f2s, nonzero_maes, nonzero_ems = [], [], [], [], [], [], []
+    for field in COUNT_COLUMNS:
+        if field in train_df.columns and field in test_df.columns:
+            y_tr_raw = train_df[field].values.astype(float)
+            y_te_raw = test_df[field].values.astype(float)
+            y_tr_binned = bin_count_target(y_tr_raw)
+            y_te_binned = bin_count_target(y_te_raw)
+            
+            if len(np.unique(y_tr_binned)) < 2:
+                preds_binned = np.full(len(y_te_binned), y_tr_binned[0] if len(y_tr_binned) > 0 else 0)
+            else:
+                clf = get_classifier(model_name, use_gpu=use_gpu)
+                clf.fit(X_train_vec, y_tr_binned)
+                preds_binned = clf.predict(X_test_vec)
+            
+            m = compute_count_regression_metrics(y_te_binned, preds_binned)
+            clf_m = compute_classification_metrics(y_te_binned, preds_binned)
+            maes.append(m["mae"])
+            rmses.append(m["rmse"])
+            ems.append(m["exact_match"])
+            nonzero_maes.append(m["nonzero_mae"])
+            nonzero_ems.append(m["nonzero_exact_match"])
+            f1s.append(clf_m["f1_weighted"])
+            f2s.append(clf_m["f2"])
+            
+    # 2. Classical Classifier deciding on BiLSTM Token Embeddings for Entity Recognition
+    if bilstm_tagger is not None and bilstm_token_cache is not None and len(bilstm_token_cache.get("X_train", [])) > 0:
+        clf_token = get_classifier(model_name, use_gpu=use_gpu)
+        clf_token.fit(bilstm_token_cache["X_train"], bilstm_token_cache["y_train"])
+        preds_entities = bilstm_tagger.predict_entities_from_classifier(clf_token, bilstm_token_cache)
+    elif bilstm_tagger is not None:
+        preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    else:
+        bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+        bilstm_tagger.fit(
+            train_df["generated_text"].tolist(),
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
     
     return {
-        "approach": f"Approach B3 (Token Tagger {model_name})",
-        "f1": loc_m["f1"],
-        "f2": loc_m["f1"],
+        "approach": f"Approach B3 (Binned {model_name} + BiLSTM-CRF)",
+        "f1": float(np.mean(f1s)) if f1s else 0.0,
+        "f2": float(np.mean(f2s)) if f2s else 0.0,
         "victim_name_exact_match": vic_m["gt_match_rate"],
         "victim_name_f1": vic_m["f1"],
         "reporter_name_exact_match": rep_m["gt_match_rate"],
@@ -412,12 +431,113 @@ def run_task2_approach_b3_token_tagger(
         "coords_f1": coords_m["f1"],
         "location_exact_match": loc_m["gt_match_rate"],
         "location_f1": loc_m["f1"],
-        "mean_count_mae": 0.0,
-        "mean_count_rmse": 0.0,
-        "count_exact_match": 0.0,
-        "nonzero_count_mae": 0.0,
-        "nonzero_count_exact_match": 0.0
-    }, preds
+        "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
+        "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
+        "count_exact_match": float(np.mean(ems)) if ems else 0.0,
+        "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
+        "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
+    }, preds_entities
+
+
+def run_task2_approach_b4_regression_bilstm_crf(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    model_name: str = "XGBRegressor",
+    use_gpu: bool = True,
+    X_train_vec: Optional[Any] = None,
+    X_test_vec: Optional[Any] = None,
+    bilstm_tagger: Optional[BiLSTM_CRF_Tagger] = None,
+    bilstm_token_cache: Optional[Dict[str, Any]] = None,
+    token_cache: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray, Dict[str, List[str]]]:
+    """
+    Evaluates Approach B4: BiLSTM-CRF Sequence Extractor -> Classical ML Regressors (17 Models) for Counts and Entity Tokens.
+    """
+    if X_train_vec is None or X_test_vec is None:
+        vectorizer = create_tfidf_vectorizer(use_hybrid=True)
+        X_train_vec = vectorizer.fit_transform(train_df["generated_text"].values)
+        X_test_vec = vectorizer.transform(test_df["generated_text"].values)
+    
+    # 1. Classical Regressors for Counts
+    maes, rmses, ems, f1s, f2s, nonzero_maes, nonzero_ems = [], [], [], [], [], [], []
+    all_y_true = []
+    all_y_pred = []
+    
+    for field in COUNT_COLUMNS:
+        if field in train_df.columns and field in test_df.columns:
+            y_tr = train_df[field].values.astype(float)
+            y_te = test_df[field].values.astype(float)
+            
+            reg = get_regressor(model_name, use_gpu=use_gpu)
+            reg.fit(X_train_vec, y_tr)
+            preds = np.clip(reg.predict(X_test_vec), 0, None)
+            
+            m = compute_count_regression_metrics(y_te, preds)
+            clf_m = compute_classification_metrics(bin_count_target(y_te), bin_count_target(preds))
+            maes.append(m["mae"])
+            rmses.append(m["rmse"])
+            ems.append(m["exact_match"])
+            nonzero_maes.append(m["nonzero_mae"])
+            nonzero_ems.append(m["nonzero_exact_match"])
+            f1s.append(clf_m["f1_weighted"])
+            f2s.append(clf_m["f2"])
+            all_y_true.extend(y_te)
+            all_y_pred.extend(preds)
+
+    # 2. Classical Classifier deciding on BiLSTM Token Embeddings for Entity Recognition
+    paired_clf = model_name.replace("Regressor", "Classifier")
+    if paired_clf not in ALL_CLASSIFIER_NAMES:
+        paired_clf = "LogisticRegression"
+        
+    if bilstm_tagger is not None and bilstm_token_cache is not None and len(bilstm_token_cache.get("X_train", [])) > 0:
+        clf_token = get_classifier(paired_clf, use_gpu=use_gpu)
+        clf_token.fit(bilstm_token_cache["X_train"], bilstm_token_cache["y_train"])
+        preds_entities = bilstm_tagger.predict_entities_from_classifier(clf_token, bilstm_token_cache)
+    elif bilstm_tagger is not None:
+        preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    else:
+        bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+        bilstm_tagger.fit(
+            train_df["generated_text"].tolist(),
+            extract_gt_entity_vector(train_df, "gt_location_name"),
+            extract_gt_entity_vector(train_df, "gt_victim_phone"),
+            extract_gt_entity_vector(train_df, "gt_google_map_url"),
+            train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+            train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+            extract_gt_entity_vector(train_df, "gt_victim_name"),
+            extract_gt_entity_vector(train_df, "gt_reporter_name")
+        )
+        preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
+            
+    return {
+        "approach": f"Approach B4 (Regressor {model_name} + BiLSTM-CRF)",
+        "f1": float(np.mean(f1s)) if f1s else 0.0,
+        "f2": float(np.mean(f2s)) if f2s else 0.0,
+        "victim_name_exact_match": vic_m["gt_match_rate"],
+        "victim_name_f1": vic_m["f1"],
+        "reporter_name_exact_match": rep_m["gt_match_rate"],
+        "reporter_name_f1": rep_m["f1"],
+        "phone_exact_match": phone_m["gt_match_rate"],
+        "phone_f1": phone_m["f1"],
+        "map_url_exact_match": url_m["gt_match_rate"],
+        "map_url_f1": url_m["f1"],
+        "coords_exact_match": coords_m["gt_match_rate"],
+        "coords_f1": coords_m["f1"],
+        "location_exact_match": loc_m["gt_match_rate"],
+        "location_f1": loc_m["f1"],
+        "mean_count_mae": float(np.mean(maes)) if maes else 0.0,
+        "mean_count_rmse": float(np.mean(rmses)) if rmses else 0.0,
+        "count_exact_match": float(np.mean(ems)) if ems else 0.0,
+        "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
+        "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
+    }, np.array(all_y_true), np.array(all_y_pred), preds_entities
 
 
 def run_task2_approach_c_hybrid(
@@ -505,7 +625,7 @@ def execute_task2_pipeline(
     token_cache = prepare_task2_token_cache(train_df, test_df)
     print(f"--- [Task 2] Token Matrix ready: train={token_cache['X_train_mat'].shape}, test={token_cache['X_test_mat'].shape} ---")
 
-    # Pre-train Standard LSTM once for Entity Extraction across Approaches B1, B2, B3, and C
+    # Pre-train Standard LSTM once for Entity Extraction across Approaches B1, B2
     print("--- [Task 2] Training Standard LSTM Sequence Tagger on GPU/CPU ---")
     lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
     lstm_tagger.fit(
@@ -518,16 +638,30 @@ def execute_task2_pipeline(
         extract_gt_entity_vector(train_df, "gt_victim_name"),
         extract_gt_entity_vector(train_df, "gt_reporter_name")
     )
-    
-    # 1. Sentence-level Combined Features (TF-IDF + LSTM Pooled Embeddings)
     X_train_lstm_sent = lstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
     X_test_lstm_sent = lstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
-    X_train_combined = sp.hstack([X_train_vec, X_train_lstm_sent], format="csr")
-    X_test_combined = sp.hstack([X_test_vec, X_test_lstm_sent], format="csr")
-    
-    # 2. Token-level LSTM Features Cache for 17 Downstream Classifiers
-    print("--- [Task 2] Extracting LSTM Token Embeddings for Downstream Classifiers ---")
+    X_train_lstm_combined = sp.hstack([X_train_vec, X_train_lstm_sent], format="csr")
+    X_test_lstm_combined = sp.hstack([X_test_vec, X_test_lstm_sent], format="csr")
     lstm_token_cache = lstm_tagger.prepare_token_feature_cache(train_df, test_df)
+
+    # Pre-train BiLSTM-CRF once for Entity Extraction across Approaches B3, B4
+    print("--- [Task 2] Training BiLSTM-CRF Sequence Tagger on GPU/CPU ---")
+    bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
+    bilstm_tagger.fit(
+        train_df["generated_text"].tolist(),
+        extract_gt_entity_vector(train_df, "gt_location_name"),
+        extract_gt_entity_vector(train_df, "gt_victim_phone"),
+        extract_gt_entity_vector(train_df, "gt_google_map_url"),
+        train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+        train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+        extract_gt_entity_vector(train_df, "gt_victim_name"),
+        extract_gt_entity_vector(train_df, "gt_reporter_name")
+    )
+    X_train_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(train_df["generated_text"].tolist())
+    X_test_bilstm_sent = bilstm_tagger.extract_sentence_embeddings(test_df["generated_text"].tolist())
+    X_train_bilstm_combined = sp.hstack([X_train_vec, X_train_bilstm_sent], format="csr")
+    X_test_bilstm_combined = sp.hstack([X_test_vec, X_test_bilstm_sent], format="csr")
+    bilstm_token_cache = bilstm_tagger.prepare_token_feature_cache(train_df, test_df)
 
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")
@@ -576,29 +710,42 @@ def execute_task2_pipeline(
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         notify_step(res_a)
     
-    # 2. Approach B1 (Binned Classifiers with LSTM Feature Extractor)
+    # Model lists
     if selected_models:
-        b1_models = []
+        clf_models = []
         for m in selected_models:
             if m in ALL_CLASSIFIER_NAMES or m == "DummyClassifier":
-                b1_models.append(m)
+                clf_models.append(m)
             elif f"{m}Classifier" in ALL_CLASSIFIER_NAMES:
-                b1_models.append(f"{m}Classifier")
+                clf_models.append(f"{m}Classifier")
             elif m.replace("Regressor", "Classifier") in ALL_CLASSIFIER_NAMES:
-                b1_models.append(m.replace("Regressor", "Classifier"))
+                clf_models.append(m.replace("Regressor", "Classifier"))
             else:
-                b1_models.append(m)
+                clf_models.append(m)
+                
+        reg_models = []
+        for m in selected_models:
+            if m in ALL_REGRESSOR_NAMES or m == "DummyRegressor":
+                reg_models.append(m)
+            elif f"{m}Regressor" in ALL_REGRESSOR_NAMES:
+                reg_models.append(f"{m}Regressor")
+            elif m.replace("Classifier", "Regressor") in ALL_REGRESSOR_NAMES:
+                reg_models.append(m.replace("Classifier", "Regressor"))
+            else:
+                reg_models.append(m)
     else:
-        b1_models = ALL_CLASSIFIER_NAMES
+        clf_models = ALL_CLASSIFIER_NAMES
+        reg_models = ALL_REGRESSOR_NAMES
 
-    for clf_name in b1_models:
+    # 2. Approach B1 (Binned Classifiers with Standard LSTM Feature Extractor)
+    for clf_name in clf_models:
         app_b1_name = f"Approach B1 (Binned {clf_name})"
         if not should_skip(app_b1_name):
             print(f"--- Task 2 Running: {app_b1_name} ---")
             try:
                 res_b1, _ = run_task2_approach_b1_binned(
                     train_df, test_df, clf_name,
-                    use_gpu=use_gpu, X_train_vec=X_train_combined, X_test_vec=X_test_combined,
+                    use_gpu=use_gpu, X_train_vec=X_train_lstm_combined, X_test_vec=X_test_lstm_combined,
                     lstm_tagger=lstm_tagger,
                     lstm_token_cache=lstm_token_cache,
                     token_cache=token_cache
@@ -609,32 +756,17 @@ def execute_task2_pipeline(
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b1_name}: {e}")
     
-    # 3. Approach B2 (Regressors benchmark with LSTM Feature Extractor)
-    if selected_models:
-        b2_models = []
-        for m in selected_models:
-            if m in ALL_REGRESSOR_NAMES or m == "DummyRegressor":
-                b2_models.append(m)
-            elif f"{m}Regressor" in ALL_REGRESSOR_NAMES:
-                b2_models.append(f"{m}Regressor")
-            elif m.replace("Classifier", "Regressor") in ALL_REGRESSOR_NAMES:
-                b2_models.append(m.replace("Classifier", "Regressor"))
-            else:
-                b2_models.append(m)
-    else:
-        b2_models = ALL_REGRESSOR_NAMES
-
+    # 3. Approach B2 (Regressors benchmark with Standard LSTM Feature Extractor)
     reg_predictions = {}
     y_true_all = None
-    
-    for r_name in b2_models:
+    for r_name in reg_models:
         app_b2_name = f"Approach B2 (Regressor {r_name})"
         if not should_skip(app_b2_name):
             print(f"--- Task 2 Running: {app_b2_name} ---")
             try:
                 res_b2, y_t, y_p, _ = run_task2_approach_b2_regression(
                     train_df, test_df, r_name,
-                    use_gpu=use_gpu, X_train_vec=X_train_combined, X_test_vec=X_test_combined,
+                    use_gpu=use_gpu, X_train_vec=X_train_lstm_combined, X_test_vec=X_test_lstm_combined,
                     lstm_tagger=lstm_tagger,
                     lstm_token_cache=lstm_token_cache,
                     token_cache=token_cache
@@ -646,67 +778,58 @@ def execute_task2_pipeline(
                 notify_step(res_b2)
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b2_name}: {e}")
-        
-    # 4. Approach B3 (Token Sequence Taggers Benchmark)
-    if selected_models:
-        b3_models = []
-        for m in selected_models:
-            if m in ("CRF", "LSTM", "Standard_LSTM", "BiLSTM-CRF", "BiLSTM"):
-                b3_models.append(m)
-            elif m in ALL_CLASSIFIER_NAMES or m == "DummyClassifier":
-                b3_models.append(m)
-            elif f"{m}Classifier" in ALL_CLASSIFIER_NAMES:
-                b3_models.append(f"{m}Classifier")
-            elif m.replace("Regressor", "Classifier") in ALL_CLASSIFIER_NAMES:
-                b3_models.append(m.replace("Regressor", "Classifier"))
-            else:
-                b3_models.append(m)
-    else:
-        b3_models = ["CRF", "LSTM"]
 
-    best_b3_entities = None
-    best_b3_score = -1.0
-    best_b3_name = "CRF"
-
-    for t_name in b3_models:
-        app_b3_name = f"Approach B3 (Token Tagger {t_name})"
+    # 4. Approach B3 (Binned Classifiers with BiLSTM-CRF Feature Extractor)
+    for clf_name in clf_models:
+        app_b3_name = f"Approach B3 (Binned {clf_name} + BiLSTM-CRF)"
         if not should_skip(app_b3_name):
             print(f"--- Task 2 Running: {app_b3_name} ---")
             try:
-                res_b3, pred_ents = run_task2_approach_b3_token_tagger(
-                    train_df, test_df, model_name=t_name,
-                    use_gpu=use_gpu, token_cache=token_cache
+                res_b3, _ = run_task2_approach_b3_binned_bilstm_crf(
+                    train_df, test_df, clf_name,
+                    use_gpu=use_gpu, X_train_vec=X_train_bilstm_combined, X_test_vec=X_test_bilstm_combined,
+                    bilstm_tagger=bilstm_tagger,
+                    bilstm_token_cache=bilstm_token_cache,
+                    token_cache=token_cache
                 )
                 results.append(res_b3)
                 pd.DataFrame(results).to_csv(task2_csv, index=False)
                 notify_step(res_b3)
-
-                score = float(res_b3.get("location_exact_match", 0.0)) + float(res_b3.get("location_f1", 0.0))
-                if score > best_b3_score:
-                    best_b3_score = score
-                    best_b3_entities = pred_ents
-                    best_b3_name = t_name
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b3_name}: {e}")
-        else:
-            # Check completed step
-            score = float(completed_map[app_b3_name].get("location_exact_match", 0.0)) + float(completed_map[app_b3_name].get("location_f1", 0.0))
-            if score > best_b3_score:
-                best_b3_score = score
-                best_b3_name = t_name
-    
-    # 5. Approach C (Hybrid System) - Evaluate Hybrid Matrix across all Regressors with best Sequence Tagger
-    for r_name in b2_models:
-        app_c_name = f"Approach C (Hybrid Rules + ML {best_b3_name} + {r_name})"
+
+    # 5. Approach B4 (Regressors benchmark with BiLSTM-CRF Feature Extractor)
+    for r_name in reg_models:
+        app_b4_name = f"Approach B4 (Regressor {r_name} + BiLSTM-CRF)"
+        if not should_skip(app_b4_name):
+            print(f"--- Task 2 Running: {app_b4_name} ---")
+            try:
+                res_b4, y_t4, y_p4, _ = run_task2_approach_b4_regression_bilstm_crf(
+                    train_df, test_df, r_name,
+                    use_gpu=use_gpu, X_train_vec=X_train_bilstm_combined, X_test_vec=X_test_bilstm_combined,
+                    bilstm_tagger=bilstm_tagger,
+                    bilstm_token_cache=bilstm_token_cache,
+                    token_cache=token_cache
+                )
+                results.append(res_b4)
+                pd.DataFrame(results).to_csv(task2_csv, index=False)
+                notify_step(res_b4)
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {app_b4_name}: {e}")
+        
+    # 6. Approach C (Hybrid System) - Evaluate Hybrid Matrix across all Regressors with best Sequence Tagger
+    best_pred_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    for r_name in reg_models:
+        app_c_name = f"Approach C (Hybrid Rules + BiLSTM-CRF + {r_name})"
         if not should_skip(app_c_name):
             print(f"--- Task 2 Running: {app_c_name} ---")
             try:
                 res_c = run_task2_approach_c_hybrid(
                     train_df, test_df,
                     best_regressor_name=r_name,
-                    best_token_model_name=best_b3_name,
-                    use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
-                    best_pred_entities=best_b3_entities,
+                    best_token_model_name="BiLSTM-CRF",
+                    use_gpu=use_gpu, X_train_vec=X_train_bilstm_combined, X_test_vec=X_test_bilstm_combined,
+                    best_pred_entities=best_pred_entities,
                     token_cache=token_cache
                 )
                 res_c["approach"] = app_c_name
