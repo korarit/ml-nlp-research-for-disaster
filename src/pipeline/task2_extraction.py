@@ -551,7 +551,11 @@ def execute_task2_pipeline(
         if not should_skip(app_b1_name):
             print(f"--- Task 2 Running: {app_b1_name} ---")
             try:
-                res_b1, _ = run_task2_approach_b1_binned(train_df, test_df, clf_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                res_b1, _ = run_task2_approach_b1_binned(
+                    train_df, test_df, clf_name,
+                    use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                    token_cache=token_cache
+                )
                 results.append(res_b1)
                 pd.DataFrame(results).to_csv(task2_csv, index=False)
                 notify_step(res_b1)
@@ -581,7 +585,11 @@ def execute_task2_pipeline(
         if not should_skip(app_b2_name):
             print(f"--- Task 2 Running: {app_b2_name} ---")
             try:
-                res_b2, y_t, y_p, _ = run_task2_approach_b2_regression(train_df, test_df, r_name, use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec)
+                res_b2, y_t, y_p, _ = run_task2_approach_b2_regression(
+                    train_df, test_df, r_name,
+                    use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                    token_cache=token_cache
+                )
                 results.append(res_b2)
                 reg_predictions[r_name] = y_p
                 y_true_all = y_t
@@ -616,7 +624,10 @@ def execute_task2_pipeline(
         if not should_skip(app_b3_name):
             print(f"--- Task 2 Running: {app_b3_name} ---")
             try:
-                res_b3, pred_ents = run_task2_approach_b3_token_tagger(train_df, test_df, model_name=t_name, use_gpu=use_gpu)
+                res_b3, pred_ents = run_task2_approach_b3_token_tagger(
+                    train_df, test_df, model_name=t_name,
+                    use_gpu=use_gpu, token_cache=token_cache
+                )
                 results.append(res_b3)
                 pd.DataFrame(results).to_csv(task2_csv, index=False)
                 notify_step(res_b3)
@@ -655,7 +666,8 @@ def execute_task2_pipeline(
                 best_regressor_name=best_reg_name,
                 best_token_model_name=best_b3_name,
                 use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
-                best_pred_entities=best_b3_entities
+                best_pred_entities=best_b3_entities,
+                token_cache=token_cache
             )
             results.append(res_c)
             pd.DataFrame(results).to_csv(task2_csv, index=False)

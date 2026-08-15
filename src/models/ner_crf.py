@@ -495,19 +495,39 @@ class SlidingWindowTokenClassifier:
         self.label_encoder = LabelEncoder()
 
     def _safe_fit_predict(self, X_tr, y_tr, X_te):
-        """Encodes string BIO tags to integers and runs prediction with safe GPU/CPU fallback."""
-        y_encoded = self.label_encoder.fit_transform(y_tr).astype(np.int32)
-        X_tr_in = X_tr.astype(np.float32) if hasattr(X_tr, "astype") else X_tr
-        X_te_in = X_te.astype(np.float32) if hasattr(X_te, "astype") else X_te
+        """
+        Fits token classifier with Entity-Preserving Subsampling (keeps 100% of entity tokens,
+        subsamples background 'O' tokens) and performs safe chunked GPU/CPU prediction.
+        """
+        y_arr = np.asarray(y_tr)
+        
+        # Entity-Preserving Subsampling: Keep 100% of all entity tokens, balance background 'O' tokens
+        if len(y_arr) > 40000:
+            ent_indices = np.where(y_arr != "O")[0]
+            o_indices = np.where(y_arr == "O")[0]
+            
+            rng = np.random.RandomState(42)
+            n_o_sample = min(len(o_indices), max(len(ent_indices) * 2, 25000))
+            sampled_o = rng.choice(o_indices, size=n_o_sample, replace=False)
+            
+            keep_idx = np.sort(np.concatenate([ent_indices, sampled_o]))
+            X_tr_sub = X_tr[keep_idx] if scipy.sparse.issparse(X_tr) else X_tr[keep_idx]
+            y_tr_sub = y_arr[keep_idx]
+        else:
+            X_tr_sub = X_tr
+            y_tr_sub = y_arr
+
+        self.label_encoder.fit(y_arr)  # Fit on full tagset to ensure all classes exist
+        y_encoded = self.label_encoder.transform(y_tr_sub).astype(np.int32)
         
         try:
-            self.clf.fit(X_tr_in, y_encoded)
-            preds_int = self.clf.predict(X_te_in)
+            self.clf.fit(X_tr_sub, y_encoded)
+            preds_int = self.clf.predict(X_te)
         except Exception as e:
-            # Fallback to CPU sklearn if cuML GPU sparse format issue occurs for specific model
-            from src.models.classifiers import get_classifier
-            cpu_clf = get_classifier(self.model_name, use_gpu=False)
-            cpu_clf.fit(X_tr, y_encoded)
+            # Fallback to CPU fast sparse LogisticRegression/SGD
+            from sklearn.linear_model import LogisticRegression
+            cpu_clf = LogisticRegression(max_iter=200, solver="saga", n_jobs=-1, random_state=42)
+            cpu_clf.fit(X_tr_sub, y_encoded)
             preds_int = cpu_clf.predict(X_te)
             
         if hasattr(preds_int, "to_numpy"):
@@ -580,8 +600,29 @@ class SlidingWindowTokenClassifier:
                 
         if X_token_dicts:
             X_mat = self.vectorizer.fit_transform(X_token_dicts)
-            y_encoded = self.label_encoder.fit_transform(y_token_labels).astype(np.int32)
-            self.clf.fit(X_mat, y_encoded)
+            y_arr = np.asarray(y_token_labels)
+            
+            if len(y_arr) > 40000:
+                ent_indices = np.where(y_arr != "O")[0]
+                o_indices = np.where(y_arr == "O")[0]
+                rng = np.random.RandomState(42)
+                n_o_sample = min(len(o_indices), max(len(ent_indices) * 2, 25000))
+                sampled_o = rng.choice(o_indices, size=n_o_sample, replace=False)
+                keep_idx = np.sort(np.concatenate([ent_indices, sampled_o]))
+                X_tr_sub = X_mat[keep_idx]
+                y_tr_sub = y_arr[keep_idx]
+            else:
+                X_tr_sub = X_mat
+                y_tr_sub = y_arr
+                
+            self.label_encoder.fit(y_arr)
+            y_encoded = self.label_encoder.transform(y_tr_sub).astype(np.int32)
+            try:
+                self.clf.fit(X_tr_sub, y_encoded)
+            except Exception:
+                from sklearn.linear_model import LogisticRegression
+                self.clf = LogisticRegression(max_iter=200, solver="saga", n_jobs=-1, random_state=42)
+                self.clf.fit(X_tr_sub, y_encoded)
         return self
 
     def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:

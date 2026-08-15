@@ -49,14 +49,23 @@ import scipy.sparse
 
 class CumlSparseToDenseAdapter:
     """
-    Adapter for cuML estimators that only accept dense float32 inputs (e.g. RandomForest, KNeighbors).
-    Converts sparse CSR matrix to dense np.float32 on the fly and ensures outputs are NumPy arrays.
+    Adapter for cuML estimators that only accept dense float32 inputs (e.g. LinearSVR, SVR, RandomForest, KNeighbors).
+    Converts sparse CSR matrix to dense np.float32 on the fly with chunked batch inference to prevent OOM.
     """
-    def __init__(self, estimator):
+    def __init__(self, estimator, max_dense_mb: float = 300.0, chunk_size: int = 10000):
         self.estimator = estimator
+        self.max_dense_mb = max_dense_mb
+        self.chunk_size = chunk_size
 
     def fit(self, X, y=None, **kwargs):
         if scipy.sparse.issparse(X):
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > self.max_dense_mb:
+                raise MemoryError(
+                    f"cuML dense fitting requires {dense_mb:.1f} MB RAM (exceeds {self.max_dense_mb} MB limit). "
+                    "Falling back to sparse-native solver."
+                )
             X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
@@ -70,7 +79,21 @@ class CumlSparseToDenseAdapter:
 
     def predict(self, X, **kwargs):
         if scipy.sparse.issparse(X):
-            X = X.toarray().astype(np.float32)
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > 50.0:  # Chunk large sparse matrices
+                all_preds = []
+                for i in range(0, n_samples, self.chunk_size):
+                    chunk = X[i : i + self.chunk_size].toarray().astype(np.float32)
+                    p = self.estimator.predict(chunk, **kwargs)
+                    if hasattr(p, "to_numpy"):
+                        p = p.to_numpy()
+                    elif hasattr(p, "get"):
+                        p = p.get()
+                    all_preds.append(np.asarray(p))
+                return np.concatenate(all_preds)
+            else:
+                X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
         preds = self.estimator.predict(X, **kwargs)
@@ -113,7 +136,8 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
                 return CumlSparseToDenseAdapter(cuml.svm.LinearSVR(**cp))
             except Exception:
                 pass
-        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
+        dual_val = kwargs.pop("dual", False)
+        p = {"random_state": random_state, "max_iter": 2000, "dual": dual_val, **kwargs}
         return LinearSVR(**p)
         
     elif m == "SVR_linear":

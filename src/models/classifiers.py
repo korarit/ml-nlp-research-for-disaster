@@ -99,13 +99,23 @@ import scipy.sparse
 class CumlSparseToDenseAdapter:
     """
     Adapter for cuML estimators that only accept dense float32 inputs (e.g. LinearSVC, SVC, RandomForest, KNeighbors).
-    Converts sparse CSR matrix to dense np.float32 on the fly and ensures outputs are NumPy arrays.
+    Converts sparse CSR matrix to dense np.float32 on the fly with chunked batch inference to prevent OOM.
     """
-    def __init__(self, estimator):
+    def __init__(self, estimator, max_dense_mb: float = 300.0, chunk_size: int = 10000):
         self.estimator = estimator
+        self.max_dense_mb = max_dense_mb
+        self.chunk_size = chunk_size
 
     def fit(self, X, y=None, **kwargs):
         if scipy.sparse.issparse(X):
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > self.max_dense_mb:
+                # If too large for single dense allocation, raise error so caller falls back to sparse CPU solver
+                raise MemoryError(
+                    f"cuML dense fitting requires {dense_mb:.1f} MB RAM (exceeds {self.max_dense_mb} MB limit). "
+                    "Falling back to sparse-native solver."
+                )
             X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
@@ -119,7 +129,21 @@ class CumlSparseToDenseAdapter:
 
     def predict(self, X, **kwargs):
         if scipy.sparse.issparse(X):
-            X = X.toarray().astype(np.float32)
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > 50.0:  # Chunk large sparse matrices
+                all_preds = []
+                for i in range(0, n_samples, self.chunk_size):
+                    chunk = X[i : i + self.chunk_size].toarray().astype(np.float32)
+                    p = self.estimator.predict(chunk, **kwargs)
+                    if hasattr(p, "to_numpy"):
+                        p = p.to_numpy()
+                    elif hasattr(p, "get"):
+                        p = p.get()
+                    all_preds.append(np.asarray(p))
+                return np.concatenate(all_preds)
+            else:
+                X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
         preds = self.estimator.predict(X, **kwargs)
@@ -131,7 +155,36 @@ class CumlSparseToDenseAdapter:
 
     def predict_proba(self, X, **kwargs):
         if scipy.sparse.issparse(X):
-            X = X.toarray().astype(np.float32)
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > 50.0:  # Chunk large sparse matrices
+                all_probs = []
+                for i in range(0, n_samples, self.chunk_size):
+                    chunk = X[i : i + self.chunk_size].toarray().astype(np.float32)
+                    if hasattr(self.estimator, "predict_proba"):
+                        pr = self.estimator.predict_proba(chunk, **kwargs)
+                    elif hasattr(self.estimator, "decision_function"):
+                        df = self.estimator.decision_function(chunk)
+                        if hasattr(df, "to_numpy"):
+                            df = df.to_numpy()
+                        elif hasattr(df, "get"):
+                            df = df.get()
+                        df = np.asarray(df)
+                        prob = 1.0 / (1.0 + np.exp(-df))
+                        if prob.ndim == 1:
+                            pr = np.vstack([1 - prob, prob]).T
+                        else:
+                            pr = prob
+                    else:
+                        raise AttributeError(f"{self.estimator.__class__.__name__} has no predict_proba or decision_function")
+                    if hasattr(pr, "to_numpy"):
+                        pr = pr.to_numpy()
+                    elif hasattr(pr, "get"):
+                        pr = pr.get()
+                    all_probs.append(np.asarray(pr))
+                return np.concatenate(all_probs, axis=0)
+            else:
+                X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
         if hasattr(self.estimator, "predict_proba"):
@@ -157,7 +210,21 @@ class CumlSparseToDenseAdapter:
 
     def decision_function(self, X, **kwargs):
         if scipy.sparse.issparse(X):
-            X = X.toarray().astype(np.float32)
+            n_samples, n_features = X.shape
+            dense_mb = (n_samples * n_features * 4) / (1024 * 1024)
+            if dense_mb > 50.0:  # Chunk large sparse matrices
+                all_dfs = []
+                for i in range(0, n_samples, self.chunk_size):
+                    chunk = X[i : i + self.chunk_size].toarray().astype(np.float32)
+                    df = self.estimator.decision_function(chunk, **kwargs)
+                    if hasattr(df, "to_numpy"):
+                        df = df.to_numpy()
+                    elif hasattr(df, "get"):
+                        df = df.get()
+                    all_dfs.append(np.asarray(df))
+                return np.concatenate(all_dfs, axis=0)
+            else:
+                X = X.toarray().astype(np.float32)
         elif isinstance(X, np.ndarray) and X.dtype != np.float32:
             X = X.astype(np.float32)
         preds = self.estimator.decision_function(X, **kwargs)
@@ -200,7 +267,9 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
                 return CumlSparseToDenseAdapter(cuml.svm.LinearSVC(**cp))
             except Exception:
                 pass
-        p = {"random_state": random_state, "max_iter": 2000, "dual": "auto", **kwargs}
+        # Use dual=False by default to solve primal optimization in O(N) rather than O(N^2) dual
+        dual_val = kwargs.pop("dual", False)
+        p = {"random_state": random_state, "max_iter": 2000, "dual": dual_val, **kwargs}
         return LinearSVC(**p)
         
     elif m == "SVC_linear":
