@@ -134,15 +134,16 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
 def run_task2_approach_b1_binned(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
-    model_name: str = "XGBClassifier",
+    model_name: str = "LogisticRegression",
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
     X_test_vec: Optional[Any] = None,
+    lstm_entities: Optional[Dict[str, List[str]]] = None,
     token_cache: Optional[Dict[str, Any]] = None
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
     """
-    Evaluates Approach B1: Pure ML Binned Categorical Classification (0, 1, 2, 3+) across counts
-    AND Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coords).
+    Evaluates Approach B1: Classical ML Binned Categorical Classifiers (17 Models) for Counts
+    combined with Standard LSTM Sequence Tagger for Named Entity Extraction.
     """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
@@ -180,13 +181,10 @@ def run_task2_approach_b1_binned(
             f1s.append(clf_m["f1_weighted"])
             f2s.append(clf_m["f2"])
             
-    tagger = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
-    if token_cache is not None:
-        preds_entities = tagger.fit_and_predict_cached(token_cache)
-    else:
-        train_texts = train_df["generated_text"].tolist()
-        tagger.fit(
-            train_texts,
+    if lstm_entities is None:
+        lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
+        lstm_tagger.fit(
+            train_df["generated_text"].tolist(),
             extract_gt_entity_vector(train_df, "gt_location_name"),
             extract_gt_entity_vector(train_df, "gt_victim_phone"),
             extract_gt_entity_vector(train_df, "gt_google_map_url"),
@@ -195,15 +193,14 @@ def run_task2_approach_b1_binned(
             extract_gt_entity_vector(train_df, "gt_victim_name"),
             extract_gt_entity_vector(train_df, "gt_reporter_name")
         )
-        test_texts = test_df["generated_text"].tolist()
-        preds_entities = tagger.predict_entities(test_texts)
+        lstm_entities = lstm_tagger.predict_entities(test_df["generated_text"].tolist())
     
-    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
-    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
-    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
-    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
-    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
-    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), lstm_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), lstm_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), lstm_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), lstm_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), lstm_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), lstm_entities["reporter_names"])
     
     return {
         "approach": f"Approach B1 (Binned {model_name})",
@@ -226,7 +223,7 @@ def run_task2_approach_b1_binned(
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
         "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
         "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
-    }, preds_entities
+    }, lstm_entities
 
 
 def run_task2_approach_b2_regression(
@@ -236,11 +233,12 @@ def run_task2_approach_b2_regression(
     use_gpu: bool = True,
     X_train_vec: Optional[Any] = None,
     X_test_vec: Optional[Any] = None,
+    lstm_entities: Optional[Dict[str, List[str]]] = None,
     token_cache: Optional[Dict[str, Any]] = None
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray, Dict[str, List[str]]]:
     """
-    Evaluates Approach B2: Pure ML Continuous Numerical Regressors across counts
-    AND Pure ML Token Sequence Tagging for all Named Entities (Names, Location, Phone, URL, Coords).
+    Evaluates Approach B2: Classical ML Continuous Numerical Regressors (17 Models) for Counts
+    combined with Standard LSTM Sequence Tagger for Named Entity Extraction.
     """
     if X_train_vec is None or X_test_vec is None:
         vectorizer = create_tfidf_vectorizer(use_hybrid=True)
@@ -278,16 +276,10 @@ def run_task2_approach_b2_regression(
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
 
-    paired_clf = model_name.replace("Regressor", "Classifier")
-    if paired_clf not in ALL_CLASSIFIER_NAMES:
-        paired_clf = "LogisticRegression"
-    tagger = SlidingWindowTokenClassifier(model_name=paired_clf, use_gpu=use_gpu)
-    if token_cache is not None:
-        preds_entities = tagger.fit_and_predict_cached(token_cache)
-    else:
-        train_texts = train_df["generated_text"].tolist()
-        tagger.fit(
-            train_texts,
+    if lstm_entities is None:
+        lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
+        lstm_tagger.fit(
+            train_df["generated_text"].tolist(),
             extract_gt_entity_vector(train_df, "gt_location_name"),
             extract_gt_entity_vector(train_df, "gt_victim_phone"),
             extract_gt_entity_vector(train_df, "gt_google_map_url"),
@@ -296,15 +288,14 @@ def run_task2_approach_b2_regression(
             extract_gt_entity_vector(train_df, "gt_victim_name"),
             extract_gt_entity_vector(train_df, "gt_reporter_name")
         )
-        test_texts = test_df["generated_text"].tolist()
-        preds_entities = tagger.predict_entities(test_texts)
+        lstm_entities = lstm_tagger.predict_entities(test_df["generated_text"].tolist())
     
-    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), preds_entities["locations"])
-    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), preds_entities["phones"])
-    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), preds_entities["urls"])
-    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), preds_entities["coords"])
-    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), preds_entities["victim_names"])
-    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), preds_entities["reporter_names"])
+    loc_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_location_name"), lstm_entities["locations"])
+    phone_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_phone"), lstm_entities["phones"])
+    url_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_google_map_url"), lstm_entities["urls"])
+    coords_m = compute_string_match_metrics(extract_gt_coords_vector(test_df), lstm_entities["coords"])
+    vic_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_victim_name"), lstm_entities["victim_names"])
+    rep_m = compute_string_match_metrics(extract_gt_entity_vector(test_df, "gt_reporter_name"), lstm_entities["reporter_names"])
             
     return {
         "approach": f"Approach B2 (Regressor {model_name})",
@@ -327,7 +318,7 @@ def run_task2_approach_b2_regression(
         "count_exact_match": float(np.mean(ems)) if ems else 0.0,
         "nonzero_count_mae": float(np.mean(nonzero_maes)) if nonzero_maes else 0.0,
         "nonzero_count_exact_match": float(np.mean(nonzero_ems)) if nonzero_ems else 0.0
-    }, np.array(all_y_true), np.array(all_y_pred), preds_entities
+    }, np.array(all_y_true), np.array(all_y_pred), lstm_entities
 
 
 def run_task2_approach_b3_token_tagger(
@@ -493,6 +484,21 @@ def execute_task2_pipeline(
     token_cache = prepare_task2_token_cache(train_df, test_df)
     print(f"--- [Task 2] Token Matrix ready: train={token_cache['X_train_mat'].shape}, test={token_cache['X_test_mat'].shape} ---")
 
+    # Pre-train Standard LSTM once for Entity Extraction across Approaches B1, B2, B3, and C
+    print("--- [Task 2] Training Standard LSTM Sequence Tagger on GPU/CPU ---")
+    lstm_tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
+    lstm_tagger.fit(
+        train_df["generated_text"].tolist(),
+        extract_gt_entity_vector(train_df, "gt_location_name"),
+        extract_gt_entity_vector(train_df, "gt_victim_phone"),
+        extract_gt_entity_vector(train_df, "gt_google_map_url"),
+        train_df.get("gt_lat", [None] * len(train_df)).tolist(),
+        train_df.get("gt_lng", [None] * len(train_df)).tolist(),
+        extract_gt_entity_vector(train_df, "gt_victim_name"),
+        extract_gt_entity_vector(train_df, "gt_reporter_name")
+    )
+    lstm_entities = lstm_tagger.predict_entities(test_df["generated_text"].tolist())
+
     results = []
     task2_csv = os.path.join(output_dir, "task2_summary.csv")
     completed_map = {}
@@ -540,7 +546,7 @@ def execute_task2_pipeline(
         pd.DataFrame(results).to_csv(task2_csv, index=False)
         notify_step(res_a)
     
-    # 2. Approach B1 (Binned Classifiers)
+    # 2. Approach B1 (Binned Classifiers with LSTM Entities)
     if selected_models:
         b1_models = []
         for m in selected_models:
@@ -563,6 +569,7 @@ def execute_task2_pipeline(
                 res_b1, _ = run_task2_approach_b1_binned(
                     train_df, test_df, clf_name,
                     use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                    lstm_entities=lstm_entities,
                     token_cache=token_cache
                 )
                 results.append(res_b1)
@@ -571,7 +578,7 @@ def execute_task2_pipeline(
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b1_name}: {e}")
     
-    # 3. Approach B2 (Regressors benchmark)
+    # 3. Approach B2 (Regressors benchmark with LSTM Entities)
     if selected_models:
         b2_models = []
         for m in selected_models:
@@ -597,6 +604,7 @@ def execute_task2_pipeline(
                 res_b2, y_t, y_p, _ = run_task2_approach_b2_regression(
                     train_df, test_df, r_name,
                     use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                    lstm_entities=lstm_entities,
                     token_cache=token_cache
                 )
                 results.append(res_b2)
@@ -655,34 +663,26 @@ def execute_task2_pipeline(
                 best_b3_score = score
                 best_b3_name = t_name
     
-    # 5. Approach C (Hybrid System) - Dynamically select best regressor from Approach B2 and best token tagger from Approach B3
-    best_reg_name = "XGBRegressor"
-    min_mae = float("inf")
-    for r in results:
-        app_title = r.get("approach", "")
-        if app_title.startswith("Approach B2 (Regressor ") and "DummyRegressor" not in app_title:
-            cand_mae = r.get("mean_count_mae", float("inf"))
-            if cand_mae < min_mae:
-                min_mae = cand_mae
-                best_reg_name = app_title.replace("Approach B2 (Regressor ", "").rstrip(")")
-                
-    app_c_name = f"Approach C (Hybrid Rules + ML {best_b3_name} + {best_reg_name}) [Best Hybrid]"
-    if not should_skip(app_c_name):
-        print(f"--- Task 2 Running: {app_c_name} ---")
-        try:
-            res_c = run_task2_approach_c_hybrid(
-                train_df, test_df,
-                best_regressor_name=best_reg_name,
-                best_token_model_name=best_b3_name,
-                use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
-                best_pred_entities=best_b3_entities,
-                token_cache=token_cache
-            )
-            results.append(res_c)
-            pd.DataFrame(results).to_csv(task2_csv, index=False)
-            notify_step(res_c)
-        except Exception as e:
-            print(f"Warning: Failed to evaluate {app_c_name}: {e}")
+    # 5. Approach C (Hybrid System) - Evaluate Hybrid Matrix across all Regressors with best Sequence Tagger
+    for r_name in b2_models:
+        app_c_name = f"Approach C (Hybrid Rules + ML {best_b3_name} + {r_name})"
+        if not should_skip(app_c_name):
+            print(f"--- Task 2 Running: {app_c_name} ---")
+            try:
+                res_c = run_task2_approach_c_hybrid(
+                    train_df, test_df,
+                    best_regressor_name=r_name,
+                    best_token_model_name=best_b3_name,
+                    use_gpu=use_gpu, X_train_vec=X_train_vec, X_test_vec=X_test_vec,
+                    best_pred_entities=best_b3_entities,
+                    token_cache=token_cache
+                )
+                res_c["approach"] = app_c_name
+                results.append(res_c)
+                pd.DataFrame(results).to_csv(task2_csv, index=False)
+                notify_step(res_c)
+            except Exception as e:
+                print(f"Warning: Failed to evaluate {app_c_name}: {e}")
     
     # Wilcoxon Residual test on regression models
     if y_true_all is not None:
