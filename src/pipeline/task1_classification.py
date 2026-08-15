@@ -38,7 +38,7 @@ def run_task1_cv(
 ) -> Dict[str, Any]:
     """Runs 5-Fold Stratified Cross-Validation for Task 1 with strict leakage prevention."""
     X = train_df["generated_text"].values
-    y = train_df["gt_is_help_request_num"].values
+    y = train_df["gt_is_help_request_num"].astype(int).values
     
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold_metrics = []
@@ -170,9 +170,9 @@ def execute_task1_pipeline(
     best_configs = {}
     
     X_train_full = train_df["generated_text"].values
-    y_train_full = train_df["gt_is_help_request_num"].values
+    y_train_full = train_df["gt_is_help_request_num"].astype(int).values
     X_test = test_df["generated_text"].values
-    y_test = test_df["gt_is_help_request_num"].values
+    y_test = test_df["gt_is_help_request_num"].astype(int).values
     
     os.makedirs(os.path.join(output_dir, "best_configs"), exist_ok=True)
     os.makedirs(os.path.join(output_dir, "logs"), exist_ok=True)

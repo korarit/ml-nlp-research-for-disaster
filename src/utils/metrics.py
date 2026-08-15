@@ -20,19 +20,42 @@ def compute_f2_score(y_true: np.ndarray, y_pred: np.ndarray, average: str = "bin
 
 def compute_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray] = None) -> Dict[str, float]:
     """Computes full classification metric suite for Task 1 and Triage tasks."""
-    is_binary = len(np.unique(y_true)) <= 2
+    y_t = np.asarray(y_true)
+    y_p = np.asarray(y_pred)
+    
+    # Handle possible continuous / float predictions or 2D probability outputs
+    unique_t = np.unique(y_t)
+    is_binary = len(unique_t) <= 2
+    
+    if is_binary:
+        if y_p.ndim > 1 and y_p.shape[1] == 2:
+            y_p = np.argmax(y_p, axis=1)
+        elif y_p.dtype.kind == 'f' or not np.issubdtype(y_p.dtype, np.integer):
+            unique_p = np.unique(y_p)
+            if not np.all(np.isin(unique_p, [0, 1, 0.0, 1.0])):
+                y_p = (y_p >= 0.5).astype(int)
+            else:
+                y_p = y_p.astype(int)
+        y_t = y_t.astype(int)
+        y_p = y_p.astype(int)
+    else:
+        if y_p.ndim > 1 and y_p.shape[1] > 1:
+            y_p = np.argmax(y_p, axis=1)
+        elif y_p.dtype.kind == 'f':
+            y_p = np.round(y_p).astype(int)
+            
     avg_mode = "binary" if is_binary else "weighted"
     
-    acc = accuracy_score(y_true, y_pred)
-    prec = precision_score(y_true, y_pred, average=avg_mode, zero_division=0)
-    rec = recall_score(y_true, y_pred, average=avg_mode, zero_division=0)
-    f1_macro = f1_score(y_true, y_pred, average="macro", zero_division=0)
-    f1_weighted = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-    f1_val = f1_score(y_true, y_pred, average=avg_mode, zero_division=0)
-    f2_val = compute_f2_score(y_true, y_pred, average=avg_mode)
+    acc = accuracy_score(y_t, y_p)
+    prec = precision_score(y_t, y_p, average=avg_mode, zero_division=0)
+    rec = recall_score(y_t, y_p, average=avg_mode, zero_division=0)
+    f1_macro = f1_score(y_t, y_p, average="macro", zero_division=0)
+    f1_weighted = f1_score(y_t, y_p, average="weighted", zero_division=0)
+    f1_val = f1_score(y_t, y_p, average=avg_mode, zero_division=0)
+    f2_val = compute_f2_score(y_t, y_p, average=avg_mode)
     
-    mcc = matthews_corrcoef(y_true, y_pred) if is_binary else 0.0
-    kappa = cohen_kappa_score(y_true, y_pred)
+    mcc = matthews_corrcoef(y_t, y_p) if is_binary else 0.0
+    kappa = cohen_kappa_score(y_t, y_p)
     
     metrics = {
         "accuracy": float(acc),

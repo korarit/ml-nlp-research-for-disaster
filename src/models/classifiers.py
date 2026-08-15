@@ -313,12 +313,6 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return SVC(**p)
         
     elif m == "RidgeClassifier":
-        if gpu_active:
-            try:
-                cp = {k: v for k, v in kwargs.items() if k != "random_state"}
-                return CumlSparseToDenseAdapter(cuml.linear_model.Ridge(**cp))
-            except Exception:
-                pass
         p = {"random_state": random_state, **kwargs}
         return RidgeClassifier(**p)
         
@@ -327,12 +321,6 @@ def get_classifier(model_name: str, use_gpu: bool = True, random_state: int = 42
         return PassiveAggressiveClassifier(**p)
         
     elif m == "SGDClassifier":
-        if gpu_active:
-            try:
-                cp = {"epochs": 1000, **{k: v for k, v in kwargs.items() if k not in ("random_state", "n_jobs", "max_iter")}}
-                return CumlSparseToDenseAdapter(cuml.linear_model.MBSGDClassifier(**cp))
-            except Exception:
-                pass
         p = {"max_iter": 1000, "random_state": random_state, "n_jobs": -1, **kwargs}
         return SGDClassifier(**p)
         
