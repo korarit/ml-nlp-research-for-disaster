@@ -945,9 +945,21 @@ class Standard_LSTM_PyTorch(nn.Module):
         return self.criterion(tag_logits, tags)
 
 
+    def extract_token_embeddings(self, sentence: torch.Tensor) -> torch.Tensor:
+        embeds = self.word_embeds(sentence).view(1, len(sentence), -1)
+        lstm_out, _ = self.lstm(embeds)
+        return lstm_out.view(len(sentence), self.hidden_dim)
+
+    def extract_sentence_embedding(self, sentence: torch.Tensor) -> torch.Tensor:
+        embeds = self.word_embeds(sentence).view(1, len(sentence), -1)
+        lstm_out, _ = self.lstm(embeds)
+        return torch.mean(lstm_out, dim=1).squeeze(0)
+
+
 class Standard_LSTM_Tagger:
     """
-    Standard PyTorch GPU/CPU Unidirectional LSTM Sequence Tagger (without CRF).
+    Standard PyTorch GPU/CPU Unidirectional LSTM Sequence Tagger & Feature Extractor (without CRF).
+    Extracts deep sequence representations to feed downstream Classical ML Classifiers & Regressors.
     """
     def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 8, lr: float = 0.01, use_gpu: bool = True):
         self.embedding_dim = embedding_dim
@@ -1002,6 +1014,155 @@ class Standard_LSTM_Tagger:
                 loss.backward()
                 optimizer.step()
         return self
+
+    def extract_sentence_embeddings(self, texts: List[str]) -> np.ndarray:
+        """Extracts pooled sentence embeddings (N, hidden_dim) for downstream Classic ML Regressors/Classifiers."""
+        if self.model is None:
+            return np.zeros((len(texts), self.hidden_dim), dtype=np.float32)
+        self.model.eval()
+        embs = []
+        with torch.no_grad():
+            for text in texts:
+                text_str = str(text or "")
+                tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+                if not tokens:
+                    embs.append(np.zeros(self.hidden_dim, dtype=np.float32))
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                sent_emb = self.model.extract_sentence_embedding(seq_in)
+                embs.append(sent_emb.cpu().numpy())
+        return np.array(embs, dtype=np.float32)
+
+    def prepare_token_feature_cache(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Extracts token-level LSTM representations for all tokens in train and test datasets,
+        enabling Classical Classifiers (XGB, RF, Logistic, etc.) to perform BIO token classification.
+        """
+        if self.model is None:
+            raise ValueError("Standard_LSTM_Tagger must be fitted before preparing token features.")
+        self.model.eval()
+        
+        def _extract_vec(df: pd.DataFrame, col: str) -> List[str]:
+            return [str(val).strip() if pd.notna(val) and str(val).lower() not in ("nan", "none", "null") else "" for val in df.get(col, [])]
+
+        train_texts = train_df["generated_text"].tolist()
+        train_locs = _extract_vec(train_df, "gt_location_name")
+        train_phones = _extract_vec(train_df, "gt_victim_phone")
+        train_urls = _extract_vec(train_df, "gt_google_map_url")
+        train_lats = train_df.get("gt_lat", [None] * len(train_df)).tolist()
+        train_lngs = train_df.get("gt_lng", [None] * len(train_df)).tolist()
+        train_vics = _extract_vec(train_df, "gt_victim_name")
+        train_reps = _extract_vec(train_df, "gt_reporter_name")
+        
+        X_train_tokens = []
+        y_train_tags = []
+        
+        with torch.no_grad():
+            for text, loc, phone, url, lat, lng, vn, rn in zip(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps):
+                tokens, spans, tags = self.multi_ner_helper._extract_multi_entity_bio(text, loc, phone, url, lat, lng, vn, rn)
+                if not tokens:
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                tok_embs = self.model.extract_token_embeddings(seq_in).cpu().numpy()
+                for i, t in enumerate(tags):
+                    if tokens[i].strip():
+                        X_train_tokens.append(tok_embs[i])
+                        y_train_tags.append(t)
+                        
+        test_texts = test_df["generated_text"].tolist()
+        X_test_tokens = []
+        test_meta = []
+        
+        with torch.no_grad():
+            for t_idx, text in enumerate(test_texts):
+                text_str = str(text or "")
+                tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+                if not tokens:
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                tok_embs = self.model.extract_token_embeddings(seq_in).cpu().numpy()
+                
+                cur = 0
+                for i, tok in enumerate(tokens):
+                    s = cur
+                    e = cur + len(tok)
+                    cur = e
+                    if tok.strip():
+                        X_test_tokens.append(tok_embs[i])
+                        test_meta.append((t_idx, s, e, tok))
+                        
+        X_tr = np.array(X_train_tokens, dtype=np.float32) if X_train_tokens else np.zeros((0, self.hidden_dim), dtype=np.float32)
+        y_tr = np.array(y_train_tags) if y_train_tags else np.array([])
+        X_te = np.array(X_test_tokens, dtype=np.float32) if X_test_tokens else np.zeros((0, self.hidden_dim), dtype=np.float32)
+        
+        if len(y_tr) > 15000:
+            ent_idx = np.where(y_tr != "O")[0]
+            o_idx = np.where(y_tr == "O")[0]
+            n_o = min(len(o_idx), max(len(ent_idx) * 3, 10000))
+            np.random.seed(42)
+            sub_o = np.random.choice(o_idx, size=n_o, replace=False)
+            keep_idx = np.sort(np.concatenate([ent_idx, sub_o]))
+            X_tr = X_tr[keep_idx]
+            y_tr = y_tr[keep_idx]
+            
+        return {
+            "X_train": X_tr,
+            "y_train": y_tr,
+            "X_test": X_te,
+            "test_meta": test_meta,
+            "test_texts": test_texts
+        }
+
+    def predict_entities_from_classifier(self, clf: Any, token_cache: Dict[str, Any]) -> Dict[str, List[str]]:
+        """Uses a trained Classical Classifier to classify LSTM token embeddings into BIO tags."""
+        test_texts = token_cache["test_texts"]
+        n_test = len(test_texts)
+        if len(token_cache["X_test"]) == 0:
+            return {"locations": [""] * n_test, "phones": [""] * n_test, "urls": [""] * n_test, "coords": [""] * n_test, "victim_names": [""] * n_test, "reporter_names": [""] * n_test}
+            
+        pred_tags = clf.predict(token_cache["X_test"])
+        
+        doc_spans = {i: [] for i in range(n_test)}
+        for (t_idx, s, e, tok), tag in zip(token_cache["test_meta"], pred_tags):
+            doc_spans[t_idx].append((s, e, tok, tag))
+            
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
+        
+        for t_idx in range(n_test):
+            text_str = str(test_texts[t_idx] or "")
+            spans_list = doc_spans[t_idx]
+            
+            def extract_span(target_type: str) -> str:
+                idx = [i for i, (s, e, tok, tag) in enumerate(spans_list) if tag in (f"B-{target_type}", f"I-{target_type}")]
+                if target_type == "LOC":
+                    while idx and spans_list[idx[0]][2].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                        idx.pop(0)
+                if idx:
+                    s_c = spans_list[idx[0]][0]
+                    e_c = spans_list[idx[-1]][1]
+                    raw_span = text_str[s_c:e_c].strip()
+                    return clean_extracted_span(raw_span, target_type)
+                return ""
+                
+            pred_locs.append(extract_span("LOC"))
+            pred_phones.append(extract_span("PHONE"))
+            pred_urls.append(extract_span("URL"))
+            pred_coords.append(extract_span("COORDS"))
+            pred_vic_names.append(extract_span("VIC_NAME"))
+            pred_rep_names.append(extract_span("REP_NAME"))
+            
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
+        }
 
     def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
         """Predicts entity spans using Standard LSTM."""
