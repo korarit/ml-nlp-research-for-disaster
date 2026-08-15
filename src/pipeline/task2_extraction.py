@@ -20,6 +20,7 @@ from src.models.rules_engine import ExtractionRulesEngine
 from src.models.ner_crf import (
     ThaiLocationCRFTagger, ThaiMultiNER_CRFTagger,
     SlidingWindowTokenClassifier, BiLSTM_CRF_Tagger,
+    Standard_LSTM_Tagger,
     prepare_task2_token_cache
 )
 from src.utils.metrics import (
@@ -162,9 +163,12 @@ def run_task2_approach_b1_binned(
             y_tr_binned = bin_count_target(y_tr_raw)
             y_te_binned = bin_count_target(y_te_raw)
             
-            clf = get_classifier(model_name, use_gpu=use_gpu)
-            clf.fit(X_train_vec, y_tr_binned)
-            preds_binned = clf.predict(X_test_vec)
+            if len(np.unique(y_tr_binned)) < 2:
+                preds_binned = np.full(len(y_te_binned), y_tr_binned[0] if len(y_tr_binned) > 0 else 0)
+            else:
+                clf = get_classifier(model_name, use_gpu=use_gpu)
+                clf.fit(X_train_vec, y_tr_binned)
+                preds_binned = clf.predict(X_test_vec)
             
             m = compute_count_regression_metrics(y_te_binned, preds_binned)
             clf_m = compute_classification_metrics(y_te_binned, preds_binned)
@@ -351,6 +355,11 @@ def run_task2_approach_b3_token_tagger(
 
     if model_name in ("CRF", "CRF_LBFGS"):
         tagger = ThaiMultiNER_CRFTagger()
+        tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
+        test_texts = test_df["generated_text"].tolist()
+        preds = tagger.predict_entities(test_texts)
+    elif model_name in ("LSTM", "Standard_LSTM", "StandardLSTM"):
+        tagger = Standard_LSTM_Tagger(use_gpu=use_gpu)
         tagger.fit(train_texts, train_locs, train_phones, train_urls, train_lats, train_lngs, train_vics, train_reps)
         test_texts = test_df["generated_text"].tolist()
         preds = tagger.predict_entities(test_texts)
@@ -598,11 +607,11 @@ def execute_task2_pipeline(
             except Exception as e:
                 print(f"Warning: Failed to evaluate {app_b2_name}: {e}")
         
-    # 4. Approach B3 (Token Sequence Taggers Benchmark across all models)
+    # 4. Approach B3 (Token Sequence Taggers Benchmark)
     if selected_models:
         b3_models = []
         for m in selected_models:
-            if m in ("CRF", "BiLSTM-CRF", "BiLSTM"):
+            if m in ("CRF", "LSTM", "Standard_LSTM", "BiLSTM-CRF", "BiLSTM"):
                 b3_models.append(m)
             elif m in ALL_CLASSIFIER_NAMES or m == "DummyClassifier":
                 b3_models.append(m)
@@ -613,7 +622,7 @@ def execute_task2_pipeline(
             else:
                 b3_models.append(m)
     else:
-        b3_models = ["CRF", "BiLSTM-CRF"] + ALL_CLASSIFIER_NAMES
+        b3_models = ["CRF", "LSTM"]
 
     best_b3_entities = None
     best_b3_score = -1.0

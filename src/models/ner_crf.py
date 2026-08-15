@@ -282,7 +282,9 @@ class ThaiMultiNER_CRFTagger:
             "is_dist": any(w.startswith(p) for p in ["อ.", "อำเภอ", "เขต"]),
             "is_subdist": any(w.startswith(p) for p in ["ต.", "ตำบล", "แขวง"]),
             "is_land": any(w.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"]),
-            "is_title": any(w.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย"]),
+            "is_title": any(w.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊"]),
+            "is_rep_clue": any(w.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ"]),
+            "is_vic_clue": any(w.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก"]),
             "is_url": "http" in w or "maps" in w or "goo.gl" in w,
             "has_dot": "." in w,
             "is_phone_len": w.isdigit() and len(w) in (3, 4, 9, 10)
@@ -296,7 +298,9 @@ class ThaiMultiNER_CRFTagger:
                 feat[f"{prefix}is_dist"] = any(nw.startswith(p) for p in ["อ.", "อำเภอ", "เขต"])
                 feat[f"{prefix}is_subdist"] = any(nw.startswith(p) for p in ["ต.", "ตำบล", "แขวง"])
                 feat[f"{prefix}is_land"] = any(nw.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
-                feat[f"{prefix}is_title"] = any(nw.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย"])
+                feat[f"{prefix}is_title"] = any(nw.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊"])
+                feat[f"{prefix}is_rep_clue"] = any(nw.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ"])
+                feat[f"{prefix}is_vic_clue"] = any(nw.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก"])
                 feat[f"{prefix}is_url"] = "http" in nw or "maps" in nw or "goo.gl" in nw
                 feat[f"{prefix}has_dot"] = "." in nw
         if i == 0:
@@ -905,4 +909,161 @@ class BiLSTM_CRF_Tagger:
             "victim_names": pred_vic_names,
             "reporter_names": pred_rep_names
         }
+
+
+class Standard_LSTM_PyTorch(nn.Module):
+    """
+    Standard Unidirectional LSTM Sequence Tagger (without CRF layer).
+    Uses Cross-Entropy Loss over BIO Tags.
+    """
+    def __init__(self, vocab_size: int, tag_to_ix: Dict[str, int], embedding_dim: int = 64, hidden_dim: int = 64):
+        super(Standard_LSTM_PyTorch, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.vocab_size = vocab_size
+        self.tag_to_ix = tag_to_ix
+        self.tagset_size = len(tag_to_ix)
+        
+        self.word_embeds = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm = nn.LSTM(
+            embedding_dim, hidden_dim,
+            num_layers=1, bidirectional=False, batch_first=True
+        )
+        self.hidden2tag = nn.Linear(hidden_dim, self.tagset_size)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, sentence: torch.Tensor):
+        embeds = self.word_embeds(sentence).view(1, len(sentence), -1)
+        lstm_out, _ = self.lstm(embeds)
+        lstm_out = lstm_out.view(len(sentence), self.hidden_dim)
+        tag_logits = self.hidden2tag(lstm_out)
+        tag_preds = torch.argmax(tag_logits, dim=1)
+        return tag_logits, tag_preds
+
+    def loss(self, sentence: torch.Tensor, tags: torch.Tensor):
+        tag_logits, _ = self.forward(sentence)
+        return self.criterion(tag_logits, tags)
+
+
+class Standard_LSTM_Tagger:
+    """
+    Standard PyTorch GPU/CPU Unidirectional LSTM Sequence Tagger (without CRF).
+    """
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 8, lr: float = 0.01, use_gpu: bool = True):
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.epochs = epochs
+        self.lr = lr
+        self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+        self.multi_ner_helper = ThaiMultiNER_CRFTagger()
+        self.word_to_ix: Dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
+        self.tag_to_ix: Dict[str, int] = {"O": 0}
+        self.model: Optional[Standard_LSTM_PyTorch] = None
+
+    def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
+        """Trains standard LSTM model on token-aligned BIO tags."""
+        tokenized_sents = []
+        tagged_sents = []
+        v_names = vic_names if vic_names is not None else [None] * len(texts)
+        r_names = rep_names if rep_names is not None else [None] * len(texts)
+        for text, loc, phone, url, lat, lng, vn, rn in zip(texts, locs, phones, urls, lats, lngs, v_names, r_names):
+            tokens, spans, tags = self.multi_ner_helper._extract_multi_entity_bio(text, loc, phone, url, lat, lng, vn, rn)
+            tokenized_sents.append(tokens)
+            tagged_sents.append(tags)
+            for w in tokens:
+                w_str = w.strip()
+                if w_str and w_str not in self.word_to_ix:
+                    self.word_to_ix[w_str] = len(self.word_to_ix)
+            for t in tags:
+                if t not in self.tag_to_ix:
+                    self.tag_to_ix[t] = len(self.tag_to_ix)
+                    
+        self.model = Standard_LSTM_PyTorch(
+            vocab_size=len(self.word_to_ix),
+            tag_to_ix=self.tag_to_ix,
+            embedding_dim=self.embedding_dim,
+            hidden_dim=self.hidden_dim
+        ).to(self.device)
+        
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
+        self.model.train()
+        for epoch in range(self.epochs):
+            for tokens, tags in zip(tokenized_sents, tagged_sents):
+                if not tokens:
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                tag_idxs = [self.tag_to_ix[t] for t in tags]
+                
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                seq_targets = torch.tensor(tag_idxs, dtype=torch.long, device=self.device)
+                
+                self.model.zero_grad()
+                loss = self.model.loss(seq_in, seq_targets)
+                loss.backward()
+                optimizer.step()
+        return self
+
+    def predict_entities(self, texts: List[str]) -> Dict[str, List[str]]:
+        """Predicts entity spans using Standard LSTM."""
+        if self.model is None:
+            return {"locations": [""] * len(texts), "phones": [""] * len(texts), "urls": [""] * len(texts), "coords": [""] * len(texts), "victim_names": [""] * len(texts), "reporter_names": [""] * len(texts)}
+            
+        self.model.eval()
+        ix_to_tag = {v: k for k, v in self.tag_to_ix.items()}
+        pred_locs, pred_phones, pred_urls, pred_coords = [], [], [], []
+        pred_vic_names, pred_rep_names = [], []
+        
+        with torch.no_grad():
+            for text in texts:
+                text_str = str(text or "")
+                tokens = word_tokenize(text_str, engine="newmm", keep_whitespace=True)
+                if not tokens:
+                    pred_locs.append("")
+                    pred_phones.append("")
+                    pred_urls.append("")
+                    pred_coords.append("")
+                    pred_vic_names.append("")
+                    pred_rep_names.append("")
+                    continue
+                idxs = [self.word_to_ix.get(w.strip(), 1) for w in tokens]
+                seq_in = torch.tensor(idxs, dtype=torch.long, device=self.device)
+                _, tag_seq = self.model(seq_in)
+                preds = [ix_to_tag.get(int(idx.item()), "O") for idx in tag_seq]
+                
+                cur = 0
+                spans = []
+                for tok in tokens:
+                    s = cur
+                    e = cur + len(tok)
+                    cur = e
+                    spans.append((s, e))
+                    
+                def extract_span(target_type: str) -> str:
+                    idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
+                    if target_type == "LOC":
+                        while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
+                            idx.pop(0)
+                    if idx:
+                        s_c = spans[idx[0]][0]
+                        e_c = spans[idx[-1]][1]
+                        raw_span = text_str[s_c:e_c].strip()
+                        return clean_extracted_span(raw_span, target_type)
+                    return ""
+                    
+                pred_locs.append(extract_span("LOC"))
+                pred_phones.append(extract_span("PHONE"))
+                pred_urls.append(extract_span("URL"))
+                pred_coords.append(extract_span("COORDS"))
+                pred_vic_names.append(extract_span("VIC_NAME"))
+                pred_rep_names.append(extract_span("REP_NAME"))
+                
+        return {
+            "locations": pred_locs,
+            "phones": pred_phones,
+            "urls": pred_urls,
+            "coords": pred_coords,
+            "victim_names": pred_vic_names,
+            "reporter_names": pred_rep_names
+        }
+
 
