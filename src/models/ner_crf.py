@@ -195,6 +195,8 @@ def clean_extracted_span(span_str: str, target_type: str) -> str:
         res = re.sub(r"^(?:พิกัด|ละติจูด|ลองจิจูด|ตำแหน่ง|coords?|lat/lng)[:\s]*", "", res, flags=re.IGNORECASE).strip()
         # Normalize whitespace around comma: "13.4553, 100.6719" -> "13.4553,100.6719"
         res = re.sub(r"\s*,\s*", ",", res)
+        # Normalize whitespace without comma: "13.4553 100.6719" -> "13.4553,100.6719"
+        res = re.sub(r"(\d{1,2}\.\d+)\s+(\d{2,3}\.\d+)", r"\1,\2", res)
     elif target_type == "PHONE":
         res = re.sub(r"^(?:เบอร์โทรศัพท์|เบอร์โทร|โทร|เบอร์|tel|phone)[:\s]*", "", res, flags=re.IGNORECASE).strip()
     elif target_type == "URL":
@@ -245,10 +247,16 @@ class ThaiMultiNER_CRFTagger:
         if lat is not None and lng is not None and str(lat).lower() not in ("nan", "none", "0.0", "0") and float(lat) != 0.0:
             c1 = f"{lat}, {lng}"
             c2 = f"{lat},{lng}"
+            c3 = f"{lat} {lng}"
+            c4 = f"{lat}/{lng}"
             if c1 in text_str:
                 entities.append(("COORDS", c1))
             elif c2 in text_str:
                 entities.append(("COORDS", c2))
+            elif c3 in text_str:
+                entities.append(("COORDS", c3))
+            elif c4 in text_str:
+                entities.append(("COORDS", c4))
                 
         for ent_type, val in entities:
             if not val or val.lower() in ("nan", "none", "null") or val not in text_str:
