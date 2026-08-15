@@ -227,7 +227,8 @@ def get_regressor(model_name: str, use_gpu: bool = True, random_state: int = 42,
         return ExtraTreesRegressor(**p)
         
     elif m == "AdaBoostRegressor":
-        p = {"random_state": random_state, **kwargs}
+        base_tree = DecisionTreeRegressor(max_depth=3, max_features="sqrt", random_state=random_state)
+        p = {"estimator": base_tree, "random_state": random_state, **kwargs}
         return AdaBoostRegressor(**p)
         
     elif m == "GradientBoostingRegressor":
