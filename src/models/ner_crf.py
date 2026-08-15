@@ -425,35 +425,36 @@ class BiLSTM_CRF_PyTorch(nn.Module):
         return lstm_feats
         
     def _forward_alg(self, feats):
+        """Vectorized forward algorithm using torch.logsumexp for high GPU/CPU performance without sync barriers."""
         init_vvars = torch.full((1, self.tagset_size), -10000.0, device=feats.device)
         init_vvars[0][self.tag_to_ix["<START>"]] = 0.0
         
         forward_var = init_vvars
         
         for feat in feats:
-            alphas_t = []
-            for next_tag in range(self.tagset_size):
-                emit_score = feat[next_tag].view(1, -1).expand(1, self.tagset_size)
-                trans_score = self.transitions[next_tag].view(1, -1)
-                next_tag_var = forward_var + trans_score + emit_score
-                alphas_t.append(log_sum_exp(next_tag_var).view(1))
-            forward_var = torch.cat(alphas_t).view(1, -1)
+            # Vectorized over all transitions and tags at once in native CUDA/C++ kernel
+            # forward_var (1, K) broadcasts across rows of transitions (K, K)
+            # logsumexp over dim 1 (prev_tag j) yields (K,) next_tag scores
+            forward_var = torch.logsumexp(forward_var + self.transitions, dim=1, keepdim=True).t() + feat.view(1, -1)
             
-        terminal_vars = forward_var + self.transitions[self.tag_to_ix["<STOP>"]]
-        alpha = log_sum_exp(terminal_vars)
+        terminal_vars = forward_var + self.transitions[self.tag_to_ix["<STOP>"]].view(1, -1)
+        alpha = torch.logsumexp(terminal_vars, dim=1)
         return alpha
         
     def _score_sentence(self, feats, tags):
-        score = torch.zeros(1, device=feats.device)
+        """Vectorized gold sentence scoring."""
         START_TAG = "<START>"
         STOP_TAG = "<STOP>"
-        tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long, device=feats.device), tags])
-        for i, feat in enumerate(feats):
-            score = score + self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
-        score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
-        return score
+        tags_with_start = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long, device=feats.device), tags])
+        
+        # Vectorized transitions & emissions
+        trans_scores = self.transitions[tags_with_start[1:], tags_with_start[:-1]]
+        emit_scores = feats[torch.arange(len(tags), device=feats.device), tags]
+        stop_trans = self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
+        return torch.sum(trans_scores) + torch.sum(emit_scores) + stop_trans
         
     def _viterbi_decode(self, feats):
+        """Vectorized Viterbi decoding on GPU/CPU."""
         backpointers = []
         
         init_vvars = torch.full((1, self.tagset_size), -10000.0, device=feats.device)
@@ -461,20 +462,13 @@ class BiLSTM_CRF_PyTorch(nn.Module):
         
         forward_var = init_vvars
         for feat in feats:
-            bptrs_t = []
-            viterbivars_t = []
+            next_tag_var = forward_var + self.transitions
+            max_vars, bptrs = torch.max(next_tag_var, dim=1)
+            forward_var = (max_vars + feat).view(1, -1)
+            backpointers.append(bptrs.tolist())
             
-            for next_tag in range(self.tagset_size):
-                next_tag_var = forward_var + self.transitions[next_tag]
-                best_tag_id = argmax(next_tag_var)
-                bptrs_t.append(best_tag_id)
-                viterbivars_t.append(next_tag_var[0][best_tag_id].view(1))
-                
-            forward_var = (torch.cat(viterbivars_t) + feat).view(1, -1)
-            backpointers.append(bptrs_t)
-            
-        terminal_vars = forward_var + self.transitions[self.tag_to_ix["<STOP>"]]
-        best_tag_id = argmax(terminal_vars)
+        terminal_vars = forward_var + self.transitions[self.tag_to_ix["<STOP>"]].view(1, -1)
+        best_tag_id = torch.argmax(terminal_vars).item()
         path_score = terminal_vars[0][best_tag_id]
         
         best_path = [best_tag_id]
@@ -797,7 +791,7 @@ class BiLSTM_CRF_Tagger:
     """
     PyTorch GPU-accelerated BiLSTM-CRF Multi-Entity Sequence Tagger.
     """
-    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 8, lr: float = 0.01, use_gpu: bool = True):
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 4, lr: float = 0.01, use_gpu: bool = True):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.epochs = epochs
@@ -809,7 +803,7 @@ class BiLSTM_CRF_Tagger:
         self.model: Optional[BiLSTM_CRF_PyTorch] = None
 
     def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
-        """Trains BiLSTM-CRF model on GPU CUDA."""
+        """Trains BiLSTM-CRF model on GPU CUDA with fast vectorized operations."""
         tokenized_sents = []
         tagged_sents = []
         v_names = vic_names if vic_names is not None else [None] * len(texts)
@@ -839,6 +833,8 @@ class BiLSTM_CRF_Tagger:
         self.model.train()
         try:
             for epoch in range(self.epochs):
+                epoch_loss = 0.0
+                n_batches = 0
                 for tokens, tags in zip(tokenized_sents, tagged_sents):
                     if not tokens:
                         continue
@@ -852,6 +848,10 @@ class BiLSTM_CRF_Tagger:
                     loss = self.model.loss(seq_in, seq_targets)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
+                    n_batches += 1
+                avg_loss = epoch_loss / max(1, n_batches)
+                print(f"  [BiLSTM-CRF] Epoch {epoch + 1}/{self.epochs} - Loss: {avg_loss:.4f}")
         except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
             print(f"Warning: GPU CUDA OOM during BiLSTM-CRF training ({e}). Falling back to CPU.")
             if torch.cuda.is_available():
@@ -1189,7 +1189,7 @@ class Standard_LSTM_Tagger:
     Standard PyTorch GPU/CPU Unidirectional LSTM Sequence Tagger & Feature Extractor (without CRF).
     Extracts deep sequence representations to feed downstream Classical ML Classifiers & Regressors.
     """
-    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 8, lr: float = 0.01, use_gpu: bool = True):
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 4, lr: float = 0.01, use_gpu: bool = True):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.epochs = epochs
@@ -1231,6 +1231,8 @@ class Standard_LSTM_Tagger:
         self.model.train()
         try:
             for epoch in range(self.epochs):
+                epoch_loss = 0.0
+                n_batches = 0
                 for tokens, tags in zip(tokenized_sents, tagged_sents):
                     if not tokens:
                         continue
@@ -1244,6 +1246,10 @@ class Standard_LSTM_Tagger:
                     loss = self.model.loss(seq_in, seq_targets)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
+                    n_batches += 1
+                avg_loss = epoch_loss / max(1, n_batches)
+                print(f"  [Standard LSTM] Epoch {epoch + 1}/{self.epochs} - Loss: {avg_loss:.4f}")
         except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
             print(f"Warning: GPU CUDA OOM during Standard LSTM training ({e}). Falling back to CPU.")
             if torch.cuda.is_available():
