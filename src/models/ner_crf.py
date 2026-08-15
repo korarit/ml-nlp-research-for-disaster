@@ -6,6 +6,7 @@ NER Tagger Suite implementing:
 
 import os
 import gc
+import copy
 import torch
 import torch.nn as nn
 import numpy as np
@@ -791,11 +792,13 @@ class BiLSTM_CRF_Tagger:
     """
     PyTorch GPU-accelerated BiLSTM-CRF Multi-Entity Sequence Tagger.
     """
-    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 4, lr: float = 0.01, use_gpu: bool = True):
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 30, lr: float = 0.003, patience: int = 4, min_delta: float = 0.0005, use_gpu: bool = True):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.epochs = epochs
         self.lr = lr
+        self.patience = patience
+        self.min_delta = min_delta
         self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
         self.multi_ner_helper = ThaiMultiNER_CRFTagger()
         self.word_to_ix: Dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
@@ -803,7 +806,7 @@ class BiLSTM_CRF_Tagger:
         self.model: Optional[BiLSTM_CRF_PyTorch] = None
 
     def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
-        """Trains BiLSTM-CRF model on GPU CUDA with fast vectorized operations."""
+        """Trains BiLSTM-CRF model on GPU CUDA with fast vectorized operations and Early Stopping."""
         tokenized_sents = []
         tagged_sents = []
         v_names = vic_names if vic_names is not None else [None] * len(texts)
@@ -829,6 +832,10 @@ class BiLSTM_CRF_Tagger:
         
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         
+        best_loss = float("inf")
+        best_weights = None
+        patience_counter = 0
+        
         # Train loop with CUDA OOM safety
         self.model.train()
         try:
@@ -852,6 +859,20 @@ class BiLSTM_CRF_Tagger:
                     n_batches += 1
                 avg_loss = epoch_loss / max(1, n_batches)
                 print(f"  [BiLSTM-CRF] Epoch {epoch + 1}/{self.epochs} - Loss: {avg_loss:.4f}")
+                
+                # Early Stopping Logic & Best Weight Tracking
+                if avg_loss < (best_loss - self.min_delta):
+                    best_loss = avg_loss
+                    best_weights = copy.deepcopy(self.model.state_dict())
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        print(f"  [BiLSTM-CRF] Early stopping triggered at epoch {epoch + 1} (Best Loss: {best_loss:.4f})")
+                        break
+                        
+            if best_weights is not None:
+                self.model.load_state_dict(best_weights)
         except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
             print(f"Warning: GPU CUDA OOM during BiLSTM-CRF training ({e}). Falling back to CPU.")
             if torch.cuda.is_available():
@@ -859,7 +880,12 @@ class BiLSTM_CRF_Tagger:
             self.device = torch.device("cpu")
             self.model = self.model.to(self.device)
             self.model.train()
+            cpu_best_loss = float("inf")
+            cpu_best_weights = None
+            cpu_patience_cnt = 0
             for epoch in range(max(1, self.epochs // 2)):
+                epoch_loss = 0.0
+                n_batches = 0
                 for tokens, tags in zip(tokenized_sents, tagged_sents):
                     if not tokens:
                         continue
@@ -871,6 +897,21 @@ class BiLSTM_CRF_Tagger:
                     loss = self.model.loss(seq_in, seq_targets)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
+                    n_batches += 1
+                avg_loss = epoch_loss / max(1, n_batches)
+                print(f"  [BiLSTM-CRF CPU Fallback] Epoch {epoch + 1}/{max(1, self.epochs // 2)} - Loss: {avg_loss:.4f}")
+                if avg_loss < (cpu_best_loss - self.min_delta):
+                    cpu_best_loss = avg_loss
+                    cpu_best_weights = copy.deepcopy(self.model.state_dict())
+                    cpu_patience_cnt = 0
+                else:
+                    cpu_patience_cnt += 1
+                    if cpu_patience_cnt >= self.patience:
+                        print(f"  [BiLSTM-CRF CPU Fallback] Early stopping at epoch {epoch + 1}")
+                        break
+            if cpu_best_weights is not None:
+                self.model.load_state_dict(cpu_best_weights)
         
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -1121,8 +1162,10 @@ class BiLSTM_CRF_Tagger:
         tagger = cls(
             embedding_dim=checkpoint.get("embedding_dim", 64),
             hidden_dim=checkpoint.get("hidden_dim", 64),
-            epochs=checkpoint.get("epochs", 8),
-            lr=checkpoint.get("lr", 0.01),
+            epochs=checkpoint.get("epochs", 30),
+            lr=checkpoint.get("lr", 0.003),
+            patience=checkpoint.get("patience", 4),
+            min_delta=checkpoint.get("min_delta", 0.0005),
             use_gpu=use_gpu
         )
         tagger.word_to_ix = checkpoint["word_to_ix"]
@@ -1189,11 +1232,13 @@ class Standard_LSTM_Tagger:
     Standard PyTorch GPU/CPU Unidirectional LSTM Sequence Tagger & Feature Extractor (without CRF).
     Extracts deep sequence representations to feed downstream Classical ML Classifiers & Regressors.
     """
-    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 4, lr: float = 0.01, use_gpu: bool = True):
+    def __init__(self, embedding_dim: int = 64, hidden_dim: int = 64, epochs: int = 30, lr: float = 0.003, patience: int = 4, min_delta: float = 0.0005, use_gpu: bool = True):
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.epochs = epochs
         self.lr = lr
+        self.patience = patience
+        self.min_delta = min_delta
         self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
         self.multi_ner_helper = ThaiMultiNER_CRFTagger()
         self.word_to_ix: Dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
@@ -1201,7 +1246,7 @@ class Standard_LSTM_Tagger:
         self.model: Optional[Standard_LSTM_PyTorch] = None
 
     def fit(self, texts: List[str], locs: List[Any], phones: List[Any], urls: List[Any], lats: List[Any], lngs: List[Any], vic_names: Optional[List[Any]] = None, rep_names: Optional[List[Any]] = None):
-        """Trains standard LSTM model on token-aligned BIO tags."""
+        """Trains standard LSTM model on token-aligned BIO tags with Early Stopping."""
         tokenized_sents = []
         tagged_sents = []
         v_names = vic_names if vic_names is not None else [None] * len(texts)
@@ -1227,6 +1272,10 @@ class Standard_LSTM_Tagger:
         
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         
+        best_loss = float("inf")
+        best_weights = None
+        patience_counter = 0
+        
         # Train loop with CUDA OOM safety
         self.model.train()
         try:
@@ -1250,6 +1299,20 @@ class Standard_LSTM_Tagger:
                     n_batches += 1
                 avg_loss = epoch_loss / max(1, n_batches)
                 print(f"  [Standard LSTM] Epoch {epoch + 1}/{self.epochs} - Loss: {avg_loss:.4f}")
+                
+                # Early Stopping Logic & Best Weight Tracking
+                if avg_loss < (best_loss - self.min_delta):
+                    best_loss = avg_loss
+                    best_weights = copy.deepcopy(self.model.state_dict())
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        print(f"  [Standard LSTM] Early stopping triggered at epoch {epoch + 1} (Best Loss: {best_loss:.4f})")
+                        break
+                        
+            if best_weights is not None:
+                self.model.load_state_dict(best_weights)
         except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
             print(f"Warning: GPU CUDA OOM during Standard LSTM training ({e}). Falling back to CPU.")
             if torch.cuda.is_available():
@@ -1257,7 +1320,12 @@ class Standard_LSTM_Tagger:
             self.device = torch.device("cpu")
             self.model = self.model.to(self.device)
             self.model.train()
+            cpu_best_loss = float("inf")
+            cpu_best_weights = None
+            cpu_patience_cnt = 0
             for epoch in range(max(1, self.epochs // 2)):
+                epoch_loss = 0.0
+                n_batches = 0
                 for tokens, tags in zip(tokenized_sents, tagged_sents):
                     if not tokens:
                         continue
@@ -1269,6 +1337,21 @@ class Standard_LSTM_Tagger:
                     loss = self.model.loss(seq_in, seq_targets)
                     loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
+                    n_batches += 1
+                avg_loss = epoch_loss / max(1, n_batches)
+                print(f"  [Standard LSTM CPU Fallback] Epoch {epoch + 1}/{max(1, self.epochs // 2)} - Loss: {avg_loss:.4f}")
+                if avg_loss < (cpu_best_loss - self.min_delta):
+                    cpu_best_loss = avg_loss
+                    cpu_best_weights = copy.deepcopy(self.model.state_dict())
+                    cpu_patience_cnt = 0
+                else:
+                    cpu_patience_cnt += 1
+                    if cpu_patience_cnt >= self.patience:
+                        print(f"  [Standard LSTM CPU Fallback] Early stopping at epoch {epoch + 1}")
+                        break
+            if cpu_best_weights is not None:
+                self.model.load_state_dict(cpu_best_weights)
         
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -1519,8 +1602,10 @@ class Standard_LSTM_Tagger:
         tagger = cls(
             embedding_dim=checkpoint.get("embedding_dim", 64),
             hidden_dim=checkpoint.get("hidden_dim", 64),
-            epochs=checkpoint.get("epochs", 8),
-            lr=checkpoint.get("lr", 0.01),
+            epochs=checkpoint.get("epochs", 30),
+            lr=checkpoint.get("lr", 0.003),
+            patience=checkpoint.get("patience", 4),
+            min_delta=checkpoint.get("min_delta", 0.0005),
             use_gpu=use_gpu
         )
         tagger.word_to_ix = checkpoint["word_to_ix"]
