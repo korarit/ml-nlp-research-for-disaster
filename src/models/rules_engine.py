@@ -34,7 +34,7 @@ class ExtractionRulesEngine:
     """Approach A Rule-Based Extraction Engine for Phone, Coordinates, Map URLs, Locations, and Counts."""
     
     PHONE_REGEX = re.compile(r"(?:0[689][0-9][\s-]?[0-9]{3,4}[\s-]?[0-9]{4}|0[0-9]{1,2}[\s-]?[0-9]{3}[\s-]?[0-9]{4})")
-    COORDS_REGEX = re.compile(r"(\d{1,2}\.\d{2,})[,\s/และ]+(?:lng|ลองจิจูด|ลอง)?\s*(9[7-9]\.\d{2,}|10[0-5]\.\d{2,})", re.IGNORECASE)
+    COORDS_REGEX = re.compile(r"(?:(?:พิกัด|ละติจูด|lat)[:\s]*)?([5-9]\.\d{2,}|1[0-9]\.\d{2,}|2[0-1]\.\d{2,})[,\s/และ\-(?:ลองจิจูด|ลอง|lng|long)]+(?:ลองจิจูด|ลอง|lng|long)?[:\s]*(9[7-9]\.\d{2,}|10[0-6]\.\d{2,})", re.IGNORECASE)
     MAP_URL_REGEX = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|www\.google\.com/maps|maps\.google\.com)[^\s,]+")
     try:
         from pythainlp.corpus import provinces
