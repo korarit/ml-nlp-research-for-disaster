@@ -81,11 +81,11 @@ def run_task2_approach_a_rules(test_df: pd.DataFrame) -> Dict[str, Any]:
 
     # Names match
     true_vics = extract_gt_entity_vector(test_df, "gt_victim_name")
-    pred_vics = [str(engine.extract_name(t) or "") for t in texts]
+    pred_vics = [str(engine.extract_victim_name(t) or "") for t in texts]
     vic_m = compute_string_match_metrics(true_vics, pred_vics)
 
     true_reps = extract_gt_entity_vector(test_df, "gt_reporter_name")
-    pred_reps = [str(engine.extract_name(t) or "") for t in texts]
+    pred_reps = [str(engine.extract_reporter_name(t) or "") for t in texts]
     rep_m = compute_string_match_metrics(true_reps, pred_reps)
     
     # Count metrics
@@ -186,11 +186,10 @@ def run_task2_approach_b1_binned(
             f1s.append(clf_m["f1_weighted"])
             f2s.append(clf_m["f2"])
             
-    # 2. Classical Classifier deciding on LSTM Token Embeddings for Entity Recognition
-    if lstm_tagger is not None and lstm_token_cache is not None and len(lstm_token_cache.get("X_train", [])) > 0:
-        clf_token = get_classifier(model_name, use_gpu=use_gpu)
-        clf_token.fit(lstm_token_cache["X_train"], lstm_token_cache["y_train"])
-        preds_entities = lstm_tagger.predict_entities_from_classifier(clf_token, lstm_token_cache)
+    # 2. Sliding Window Token Classifier or Standard LSTM for Entity Recognition
+    if token_cache is not None:
+        sliding_clf = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
+        preds_entities = sliding_clf.fit_and_predict_cached(token_cache)
     elif lstm_tagger is not None:
         preds_entities = lstm_tagger.predict_entities(test_df["generated_text"].tolist())
     else:
@@ -289,15 +288,14 @@ def run_task2_approach_b2_regression(
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
 
-    # 2. Classical Classifier deciding on LSTM Token Embeddings for Entity Recognition
+    # 2. Sliding Window Token Classifier or Standard LSTM for Entity Recognition
     paired_clf = model_name.replace("Regressor", "Classifier")
     if paired_clf not in ALL_CLASSIFIER_NAMES:
         paired_clf = "LogisticRegression"
         
-    if lstm_tagger is not None and lstm_token_cache is not None and len(lstm_token_cache.get("X_train", [])) > 0:
-        clf_token = get_classifier(paired_clf, use_gpu=use_gpu)
-        clf_token.fit(lstm_token_cache["X_train"], lstm_token_cache["y_train"])
-        preds_entities = lstm_tagger.predict_entities_from_classifier(clf_token, lstm_token_cache)
+    if token_cache is not None:
+        sliding_clf = SlidingWindowTokenClassifier(model_name=paired_clf, use_gpu=use_gpu)
+        preds_entities = sliding_clf.fit_and_predict_cached(token_cache)
     elif lstm_tagger is not None:
         preds_entities = lstm_tagger.predict_entities(test_df["generated_text"].tolist())
     else:
@@ -390,13 +388,12 @@ def run_task2_approach_b3_binned_bilstm_crf(
             f1s.append(clf_m["f1_weighted"])
             f2s.append(clf_m["f2"])
             
-    # 2. Classical Classifier deciding on BiLSTM Token Embeddings for Entity Recognition
-    if bilstm_tagger is not None and bilstm_token_cache is not None and len(bilstm_token_cache.get("X_train", [])) > 0:
-        clf_token = get_classifier(model_name, use_gpu=use_gpu)
-        clf_token.fit(bilstm_token_cache["X_train"], bilstm_token_cache["y_train"])
-        preds_entities = bilstm_tagger.predict_entities_from_classifier(clf_token, bilstm_token_cache)
-    elif bilstm_tagger is not None:
+    # 2. BiLSTM-CRF Viterbi Sequence Tagger for Entity Recognition
+    if bilstm_tagger is not None:
         preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    elif token_cache is not None:
+        sliding_clf = SlidingWindowTokenClassifier(model_name=model_name, use_gpu=use_gpu)
+        preds_entities = sliding_clf.fit_and_predict_cached(token_cache)
     else:
         bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
         bilstm_tagger.fit(
@@ -487,17 +484,16 @@ def run_task2_approach_b4_regression_bilstm_crf(
             all_y_true.extend(y_te)
             all_y_pred.extend(preds)
 
-    # 2. Classical Classifier deciding on BiLSTM Token Embeddings for Entity Recognition
+    # 2. BiLSTM-CRF Viterbi Sequence Tagger for Entity Recognition
     paired_clf = model_name.replace("Regressor", "Classifier")
     if paired_clf not in ALL_CLASSIFIER_NAMES:
         paired_clf = "LogisticRegression"
         
-    if bilstm_tagger is not None and bilstm_token_cache is not None and len(bilstm_token_cache.get("X_train", [])) > 0:
-        clf_token = get_classifier(paired_clf, use_gpu=use_gpu)
-        clf_token.fit(bilstm_token_cache["X_train"], bilstm_token_cache["y_train"])
-        preds_entities = bilstm_tagger.predict_entities_from_classifier(clf_token, bilstm_token_cache)
-    elif bilstm_tagger is not None:
+    if bilstm_tagger is not None:
         preds_entities = bilstm_tagger.predict_entities(test_df["generated_text"].tolist())
+    elif token_cache is not None:
+        sliding_clf = SlidingWindowTokenClassifier(model_name=paired_clf, use_gpu=use_gpu)
+        preds_entities = sliding_clf.fit_and_predict_cached(token_cache)
     else:
         bilstm_tagger = BiLSTM_CRF_Tagger(use_gpu=use_gpu)
         bilstm_tagger.fit(

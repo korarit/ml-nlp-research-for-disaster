@@ -33,7 +33,7 @@ class SimpleKeywordRules:
 class ExtractionRulesEngine:
     """Approach A Rule-Based Extraction Engine for Phone, Coordinates, Map URLs, Locations, and Counts."""
     
-    PHONE_REGEX = re.compile(r"(?:0[689][0-9][\s-]?[0-9]{3,4}[\s-]?[0-9]{4}|0[0-9]{1,2}[\s-]?[0-9]{3}[\s-]?[0-9]{4})")
+    PHONE_REGEX = re.compile(r"(?:(?:\+66|66|0)[\s\-\.\/–—]*[1-9](?:[\s\-\.\/–—]*\d){7,8}|1(?:91|669|784|567|300|196))")
     COORDS_REGEX = re.compile(r"(?:(?:พิกัด|ละติจูด|lat)[:\s]*)?([5-9]\.\d{2,}|1[0-9]\.\d{2,}|2[0-1]\.\d{2,})[,\s/และ\-(?:ลองจิจูด|ลอง|lng|long)]+(?:ลองจิจูด|ลอง|lng|long)?[:\s]*(9[7-9]\.\d{2,}|10[0-6]\.\d{2,})", re.IGNORECASE)
     MAP_URL_REGEX = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|www\.google\.com/maps|maps\.google\.com)[^\s,]+")
     try:
@@ -78,7 +78,11 @@ class ExtractionRulesEngine:
     
     def extract_phone(self, text: str) -> Optional[str]:
         m = self.PHONE_REGEX.search(str(text))
-        return m.group(0).strip() if m else None
+        if m:
+            raw = m.group(0).strip()
+            raw = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|จ้า|ด่วน|เลย|โทร|เบอร์|พิกัด).*$", "", raw).strip()
+            return raw
+        return None
 
     def extract_location(self, text: str) -> Optional[str]:
         cleaned_text = str(text or "")
@@ -117,20 +121,58 @@ class ExtractionRulesEngine:
                     pass
         return 0
         
-    def extract_name(self, text: str) -> Optional[str]:
+    def extract_victim_name(self, text: str) -> Optional[str]:
+        """Extracts victim name using clue patterns around help/symptoms/stuck."""
         cleaned_text = str(text or "")
-        name_pats = [
-            re.compile(r"(?:นาย|นาง|นางสาว|น้อง|ลุง|ป้า|น้า|อา|คุณ|พี่|หมอ|เฮีย|เจ๊|ตาสี|ยาย)\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
-            re.compile(r"(?:ชื่อ|ผู้แจ้ง|ผู้ติดต่อ|คนแจ้ง)\s*([ก-๙]+(?:\s+[ก-๙]+)?)")
+        vic_pats = [
+            re.compile(r"(?:ช่วย|ช่วยเหลือ|ช่วยชีวิต|นำตัว|ส่งตัว)\s*(?:น้อง|พี่|คุณ|นาย|นาง|นางสาว|ลุง|ป้า|น้า|อา|ตา|ยาย|ผู้ป่วย|คนไข้)?\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
+            re.compile(r"(?:มีผู้ป่วย|ผู้ประสบภัย|คนติดอยู่|ติดอยู่คือ|คนเจ็บคือ)\s*(?:ชื่อ)?\s*(?:น้อง|พี่|คุณ|นาย|นาง|นางสาว|ลุง|ป้า|น้า|อา|ตา|ยาย)?\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
+            re.compile(r"([ก-๙]+(?:\s+[ก-๙]+)?)\s*(?:\([ก-๙]+\))?\s*(?:ติดอยู่|อาการหนัก|ป่วย|หมดสติ|ไม่ไหวแล้ว|จมน้ำ|ติดเตียง)"),
+            re.compile(r"(?:น้อง|พี่|คุณ|นาย|นาง|นางสาว|ลุง|ป้า|น้า|อา|ตา|ยาย)\s*([ก-๙]+(?:\s+[ก-๙]+)?)\s*(?:ติดอยู่|ป่วย|มีอาการ)")
         ]
-        for pat in name_pats:
+        titles = sorted(["นาย", "นางสาว", "นาง", "เด็กชาย", "เด็กหญิง", "ด.ช.", "ด.ญ.", "น้อง", "พี่", "ลุง", "ป้า", "น้า", "อา", "คุณ", "ตา", "ยาย", "หมอ", "เฮีย", "เจ๊"], key=len, reverse=True)
+        for pat in vic_pats:
             m = pat.search(cleaned_text)
             if m:
-                cand = m.group(0).strip()
-                cand = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|โทร|เบอร์|พิกัด).*$", "", cand)
-                if len(cand) > 2:
+                cand = m.group(1).strip()
+                cand = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|ด้วย|ติดอยู่|อาการ|ด่วน|เอง|โทร|เบอร์|พิกัด).*$", "", cand).strip()
+                for t in titles:
+                    if cand.startswith(t):
+                        cand = cand[len(t):].strip()
+                        break
+                cand = cand.strip(".,()[]{} \t\r\n")
+                if len(cand) >= 2 and cand not in ("ความช่วยเหลือ", "ผู้ป่วย", "ทุกคน", "เรา", "พวกเขา", "เจ้าหน้าที่", "กู้ภัย", "คน", "คนไข้"):
                     return cand
         return None
+
+    def extract_reporter_name(self, text: str) -> Optional[str]:
+        """Extracts reporter name using clue patterns around contact/reporting/phones."""
+        cleaned_text = str(text or "")
+        rep_pats = [
+            re.compile(r"(?:ติดต่อ|โทรหา|โทร|ผู้แจ้ง|คนแจ้ง|แจ้งโดย|ฝากแจ้งโดย|ประสานงานโดย|จาก|โพสต์โดย)\s*(?:คุณ|นาย|นาง|นางสาว|น้อง|พี่|ลุง|ป้า|น้า|อา|หมอ|เฮีย|เจ๊|ตา|ยาย)?\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
+            re.compile(r"([ก-๙]+(?:\s+[ก-๙]+)?)\s*(?:\([ก-๙]+\))?\s*(?:แจ้งว่า|โทรแจ้ง|ฝากแจ้ง|เป็นคนแจ้ง|ประสานงาน)"),
+            re.compile(r"(?:ชื่อผม|หนูชื่อ|ผมชื่อ|ข้าพเจ้า|ตัวผม|ดิฉัน)\s*([ก-๙]+(?:\s+[ก-๙]+)?)"),
+            re.compile(r"([ก-๙]+(?:\s+[ก-๙]+)?)\s*(?:เองครับ|เองค่ะ)"),
+            re.compile(r"(?:ผู้แจ้ง|คนแจ้ง|แจ้งโดย|ฝากแจ้ง)\s*([ก-๙]+(?:\s+[ก-๙]+)?)")
+        ]
+        titles = sorted(["นาย", "นางสาว", "นาง", "เด็กชาย", "เด็กหญิง", "ด.ช.", "ด.ญ.", "น้อง", "พี่", "ลุง", "ป้า", "น้า", "อา", "คุณ", "ตา", "ยาย", "หมอ", "เฮีย", "เจ๊"], key=len, reverse=True)
+        for pat in rep_pats:
+            m = pat.search(cleaned_text)
+            if m:
+                cand = m.group(1).strip()
+                cand = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|ได้ที่|โทร|เบอร์|พิกัด|ด่วน|เอง).*$", "", cand).strip()
+                for t in titles:
+                    if cand.startswith(t):
+                        cand = cand[len(t):].strip()
+                        break
+                cand = cand.strip(".,()[]{} \t\r\n")
+                if len(cand) >= 2 and cand not in ("ความช่วยเหลือ", "ผู้ป่วย", "ทุกคน", "เรา", "พวกเขา", "เจ้าหน้าที่", "กู้ภัย"):
+                    return cand
+        return None
+
+    def extract_name(self, text: str) -> Optional[str]:
+        """Generic name extraction fallback for backwards compatibility."""
+        return self.extract_victim_name(text) or self.extract_reporter_name(text)
 
     def extract_all_counts(self, text: str) -> Dict[str, int]:
         return {field: self.extract_count(text, field) for field in self.COUNT_PATTERNS.keys()}

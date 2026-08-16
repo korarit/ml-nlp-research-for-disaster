@@ -24,26 +24,15 @@ def compute_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_pro
     y_p = np.asarray(y_pred)
     
     # Handle possible continuous / float predictions or 2D probability outputs
-    unique_t = np.unique(y_t)
-    is_binary = len(unique_t) <= 2
+    if y_p.ndim > 1 and y_p.shape[1] > 1:
+        y_p = np.argmax(y_p, axis=1)
+    elif y_p.dtype.kind == 'f':
+        y_p = np.round(y_p).astype(int)
+    y_t = y_t.astype(int) if np.issubdtype(y_t.dtype, np.number) else y_t
+    y_p = y_p.astype(int) if np.issubdtype(y_p.dtype, np.number) else y_p
     
-    if is_binary:
-        if y_p.ndim > 1 and y_p.shape[1] == 2:
-            y_p = np.argmax(y_p, axis=1)
-        elif y_p.dtype.kind == 'f' or not np.issubdtype(y_p.dtype, np.integer):
-            unique_p = np.unique(y_p)
-            if not np.all(np.isin(unique_p, [0, 1, 0.0, 1.0])):
-                y_p = (y_p >= 0.5).astype(int)
-            else:
-                y_p = y_p.astype(int)
-        y_t = y_t.astype(int)
-        y_p = y_p.astype(int)
-    else:
-        if y_p.ndim > 1 and y_p.shape[1] > 1:
-            y_p = np.argmax(y_p, axis=1)
-        elif y_p.dtype.kind == 'f':
-            y_p = np.round(y_p).astype(int)
-            
+    unique_all = np.union1d(np.unique(y_t), np.unique(y_p))
+    is_binary = len(unique_all) <= 2 and set(unique_all).issubset({0, 1, 0.0, 1.0, "0", "1"})
     avg_mode = "binary" if is_binary else "weighted"
     
     acc = accuracy_score(y_t, y_p)

@@ -201,10 +201,116 @@ def clean_extracted_span(span_str: str, target_type: str) -> str:
         # Normalize whitespace without comma: "13.4553 100.6719" -> "13.4553,100.6719"
         res = re.sub(r"(\d{1,2}\.\d+)\s+(\d{2,3}\.\d+)", r"\1,\2", res)
     elif target_type == "PHONE":
-        res = re.sub(r"^(?:เบอร์โทรศัพท์|เบอร์โทร|โทร|เบอร์|tel|phone)[:\s]*", "", res, flags=re.IGNORECASE).strip()
+        res = re.sub(r"^(?:เบอร์โทรศัพท์|เบอร์โทร|โทรศัพท์|ติดต่อ|โทร|เบอร์|tel|phone|call)[:\s]*", "", res, flags=re.IGNORECASE).strip()
+        # Normalize +66 prefix to 0
+        if res.startswith("+66"):
+            res = "0" + res[3:].strip()
+        elif res.startswith("66") and len(re.sub(r"\D", "", res)) == 11:
+            res = "0" + res[2:].strip()
+        res = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|ด่วน|เลย|พิกัด|ผู้แจ้ง).*$", "", res).strip()
+        res = res.strip(".,()[]{} \t\r\n")
     elif target_type == "URL":
-        res = res.strip("., \t\r\n")
+        res = res.strip(".,()[]{} \t\r\n")
+    elif target_type in ("VIC_NAME", "REP_NAME"):
+        # Remove leading action / contact keywords
+        res = re.sub(r"^(?:ติดต่อ|โทรหา|โทร|ผู้แจ้ง|คนแจ้ง|แจ้งโดย|ฝากแจ้ง|ประสานงาน|ช่วย|ช่วยเหลือ|คนเจ็บ|ผู้ป่วย|คนไข้|ชื่อ|ผมชื่อ|หนูชื่อ)[:\s]*", "", res, flags=re.IGNORECASE).strip()
+        # Remove standard Thai title prefixes
+        titles = sorted(["นาย", "นางสาว", "นาง", "เด็กชาย", "เด็กหญิง", "ด.ช.", "ด.ญ.", "น้อง", "พี่", "ลุง", "ป้า", "น้า", "อา", "คุณ", "ตา", "ยาย", "หมอ", "เฮีย", "เจ๊", "ตาสี", "ยายสา"], key=len, reverse=True)
+        for t in titles:
+            if res.startswith(t):
+                res = res[len(t):].strip()
+                break
+        # Remove trailing polite particles and noise
+        res = re.sub(r"\s*(?:ครับ|ค่ะ|คะ|นะ|ด่วน|เอง|โทร|เบอร์|พิกัด|เลย).*$", "", res).strip()
+        res = res.strip(".,()[]{} \t\r\n")
     return res
+
+
+def extract_entity_spans_from_tokens(text_str: str, tokens: List[str], spans: List[Tuple[int, int]], preds: List[str]) -> Dict[str, str]:
+    """
+    Robustly decodes token BIO sequence predictions into normalized entity spans
+    using contiguous chunk extraction and heuristic entity validation.
+    """
+    def get_chunks(target_type: str) -> List[str]:
+        chunks = []
+        cur_indices = []
+        for i, (s, e) in enumerate(spans):
+            tag = preds[i] if i < len(preds) else "O"
+            if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip():
+                if not cur_indices:
+                    cur_indices.append((i, s, e))
+                else:
+                    if i == cur_indices[-1][0] + 1:
+                        cur_indices.append((i, s, e))
+                    else:
+                        s_c = cur_indices[0][1]
+                        e_c = cur_indices[-1][2]
+                        raw = text_str[s_c:e_c].strip()
+                        cleaned = clean_extracted_span(raw, target_type)
+                        if cleaned:
+                            chunks.append(cleaned)
+                        cur_indices = [(i, s, e)]
+            else:
+                if cur_indices:
+                    s_c = cur_indices[0][1]
+                    e_c = cur_indices[-1][2]
+                    raw = text_str[s_c:e_c].strip()
+                    cleaned = clean_extracted_span(raw, target_type)
+                    if cleaned:
+                        chunks.append(cleaned)
+                    cur_indices = []
+        if cur_indices:
+            s_c = cur_indices[0][1]
+            e_c = cur_indices[-1][2]
+            raw = text_str[s_c:e_c].strip()
+            cleaned = clean_extracted_span(raw, target_type)
+            if cleaned:
+                chunks.append(cleaned)
+
+        if target_type == "URL":
+            for c in chunks:
+                if "http" in c or "maps" in c or "goo.gl" in c:
+                    return c
+            return chunks[0] if chunks else ""
+        elif target_type == "PHONE":
+            for c in chunks:
+                digits = re.sub(r"\D", "", c)
+                if digits.startswith("66") and len(digits) == 11:
+                    digits = "0" + digits[2:]
+                if (digits.startswith("0") and len(digits) in (9, 10)) or (len(digits) in (3, 4) and c.strip().isdigit()):
+                    return c
+            return chunks[0] if chunks else ""
+        elif target_type == "COORDS":
+            for c in chunks:
+                if "," in c or ("." in c and any(ch.isdigit() for ch in c)):
+                    return c
+            return chunks[0] if chunks else ""
+        elif target_type in ("VIC_NAME", "REP_NAME"):
+            for c in chunks:
+                if len(c) >= 2 and c not in ("ความช่วยเหลือ", "ผู้ป่วย", "ทุกคน", "เรา", "พวกเขา", "เจ้าหน้าที่", "กู้ภัย", "คน", "คนไข้"):
+                    return c
+            return chunks[0] if chunks else ""
+        elif target_type == "LOC":
+            if chunks:
+                clean_chunks = []
+                for c in chunks:
+                    c_clean = re.sub(r"^(?:ที่|อยู่ที่|อยู่|บริเวณ|ตรง|พื้นที่|ตอนนี้|ตอนนี้อยู่ที่)\s*", "", c).strip()
+                    if len(c_clean) > 2:
+                        clean_chunks.append(c_clean)
+                if clean_chunks:
+                    return max(clean_chunks, key=len)
+                return chunks[0]
+            return ""
+        return chunks[0] if chunks else ""
+
+    return {
+        "locations": get_chunks("LOC"),
+        "phones": get_chunks("PHONE"),
+        "urls": get_chunks("URL"),
+        "coords": get_chunks("COORDS"),
+        "victim_names": get_chunks("VIC_NAME"),
+        "reporter_names": get_chunks("REP_NAME")
+    }
 
 
 class ThaiMultiNER_CRFTagger:
@@ -261,11 +367,30 @@ class ThaiMultiNER_CRFTagger:
             elif c4 in text_str:
                 entities.append(("COORDS", c4))
                 
+        titles = sorted(["นาย", "นางสาว", "นาง", "เด็กชาย", "เด็กหญิง", "ด.ช.", "ด.ญ.", "น้อง", "พี่", "ลุง", "ป้า", "น้า", "อา", "คุณ", "ตา", "ยาย", "หมอ", "เฮีย", "เจ๊", "ตาสี", "ยายสา"], key=len, reverse=True)
         for ent_type, val in entities:
-            if not val or val.lower() in ("nan", "none", "null") or val not in text_str:
+            if not val or val.lower() in ("nan", "none", "null"):
                 continue
-            start_c = text_str.find(val)
-            end_c = start_c + len(val)
+            
+            # Step 1: Exact search
+            target_str = None
+            if val in text_str:
+                target_str = val
+            elif ent_type in ("VIC_NAME", "REP_NAME"):
+                # Step 2: Title/Prefix-stripped search
+                stripped = val
+                for t in titles:
+                    if stripped.startswith(t):
+                        stripped = stripped[len(t):].strip()
+                        break
+                if stripped and len(stripped) >= 2 and stripped in text_str:
+                    target_str = stripped
+                    
+            if not target_str:
+                continue
+
+            start_c = text_str.find(target_str)
+            end_c = start_c + len(target_str)
             first = True
             for i, (s, e) in enumerate(spans):
                 if max(s, start_c) < min(e, end_c) and tokens[i].strip():
@@ -285,9 +410,9 @@ class ThaiMultiNER_CRFTagger:
             "is_dist": any(w.startswith(p) for p in ["อ.", "อำเภอ", "เขต"]),
             "is_subdist": any(w.startswith(p) for p in ["ต.", "ตำบล", "แขวง"]),
             "is_land": any(w.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"]),
-            "is_title": any(w.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊"]),
-            "is_rep_clue": any(w.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ"]),
-            "is_vic_clue": any(w.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก"]),
+            "is_title": any(w.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊", "ด.ช.", "ด.ญ."]),
+            "is_rep_clue": any(w.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ฝากแจ้ง", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ", "จาก", "เองครับ", "เองค่ะ", "โพสต์โดย", "แชร์ต่อ"]),
+            "is_vic_clue": any(w.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "ช่วย", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก", "คนเจ็บ", "ผู้ประสบภัย", "คนไข้", "อาการหนัก"]),
             "is_url": "http" in w or "maps" in w or "goo.gl" in w,
             "has_dot": "." in w,
             "is_phone_len": w.isdigit() and len(w) in (3, 4, 9, 10)
@@ -301,9 +426,9 @@ class ThaiMultiNER_CRFTagger:
                 feat[f"{prefix}is_dist"] = any(nw.startswith(p) for p in ["อ.", "อำเภอ", "เขต"])
                 feat[f"{prefix}is_subdist"] = any(nw.startswith(p) for p in ["ต.", "ตำบล", "แขวง"])
                 feat[f"{prefix}is_land"] = any(nw.startswith(p) for p in ["บ้าน", "วัด", "ซอย", "ถนน", "หมู่", "ม.", "ชุมชน", "คอนโด", "โรงเรียน", "สะพาน", "ตลาด"])
-                feat[f"{prefix}is_title"] = any(nw.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊"])
-                feat[f"{prefix}is_rep_clue"] = any(nw.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ"])
-                feat[f"{prefix}is_vic_clue"] = any(nw.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก"])
+                feat[f"{prefix}is_title"] = any(nw.startswith(p) for p in ["นาย", "นาง", "น้อง", "ลุง", "ป้า", "น้า", "อา", "คุณ", "พี่", "หมอ", "เฮีย", "ยาย", "ตา", "เจ๊", "ด.ช.", "ด.ญ."])
+                feat[f"{prefix}is_rep_clue"] = any(nw.startswith(p) for p in ["ติดต่อ", "โทร", "เบอร์", "ผู้แจ้ง", "คนแจ้ง", "แจ้งโดย", "ฝากแจ้ง", "ประสานงาน", "ชื่อผม", "หนูชื่อ", "ผมชื่อ", "จาก", "เองครับ", "เองค่ะ", "โพสต์โดย", "แชร์ต่อ"])
+                feat[f"{prefix}is_vic_clue"] = any(nw.startswith(p) for p in ["ติดอยู่", "ช่วยเหลือ", "ช่วย", "มีอาการ", "คนท้อง", "คนแก่", "ป่วย", "หมดสติ", "จมน้ำ", "ติดเตียง", "บาดเจ็บ", "หลาน", "ยาย", "ตา", "เด็ก", "คนเจ็บ", "ผู้ประสบภัย", "คนไข้", "อาการหนัก"])
                 feat[f"{prefix}is_url"] = "http" in nw or "maps" in nw or "goo.gl" in nw
                 feat[f"{prefix}has_dot"] = "." in nw
         if i == 0:
@@ -352,24 +477,13 @@ class ThaiMultiNER_CRFTagger:
                 cur = e
                 spans.append((s, e))
                 
-            def extract_span(target_type: str) -> str:
-                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
-                if target_type == "LOC":
-                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                        idx.pop(0)
-                if idx:
-                    s_c = spans[idx[0]][0]
-                    e_c = spans[idx[-1]][1]
-                    raw_span = text_str[s_c:e_c].strip()
-                    return clean_extracted_span(raw_span, target_type)
-                return ""
-                
-            pred_locs.append(extract_span("LOC"))
-            pred_phones.append(extract_span("PHONE"))
-            pred_urls.append(extract_span("URL"))
-            pred_coords.append(extract_span("COORDS"))
-            pred_vic_names.append(extract_span("VIC_NAME"))
-            pred_rep_names.append(extract_span("REP_NAME"))
+            res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+            pred_locs.append(res["locations"])
+            pred_phones.append(res["phones"])
+            pred_urls.append(res["urls"])
+            pred_coords.append(res["coords"])
+            pred_vic_names.append(res["victim_names"])
+            pred_rep_names.append(res["reporter_names"])
             
         return {
             "locations": pred_locs,
@@ -597,24 +711,13 @@ class SlidingWindowTokenClassifier:
                 continue
             preds = all_preds[s_i:e_i]
             
-            def extract_span(target_type: str) -> str:
-                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
-                if target_type == "LOC":
-                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                        idx.pop(0)
-                if idx:
-                    s_c = spans[idx[0]][0]
-                    e_c = spans[idx[-1]][1]
-                    raw_span = t_str[s_c:e_c].strip()
-                    return clean_extracted_span(raw_span, target_type)
-                return ""
-                
-            pred_locs.append(extract_span("LOC"))
-            pred_phones.append(extract_span("PHONE"))
-            pred_urls.append(extract_span("URL"))
-            pred_coords.append(extract_span("COORDS"))
-            pred_vic_names.append(extract_span("VIC_NAME"))
-            pred_rep_names.append(extract_span("REP_NAME"))
+            res = extract_entity_spans_from_tokens(t_str, tokens, spans, preds)
+            pred_locs.append(res["locations"])
+            pred_phones.append(res["phones"])
+            pred_urls.append(res["urls"])
+            pred_coords.append(res["coords"])
+            pred_vic_names.append(res["victim_names"])
+            pred_rep_names.append(res["reporter_names"])
             
         return {
             "locations": pred_locs,
@@ -700,24 +803,13 @@ class SlidingWindowTokenClassifier:
                 cur = e
                 spans.append((s, e))
                 
-            def extract_span(target_type: str) -> str:
-                idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
-                if target_type == "LOC":
-                    while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                        idx.pop(0)
-                if idx:
-                    s_c = spans[idx[0]][0]
-                    e_c = spans[idx[-1]][1]
-                    raw_span = text_str[s_c:e_c].strip()
-                    return clean_extracted_span(raw_span, target_type)
-                return ""
-                
-            pred_locs.append(extract_span("LOC"))
-            pred_phones.append(extract_span("PHONE"))
-            pred_urls.append(extract_span("URL"))
-            pred_coords.append(extract_span("COORDS"))
-            pred_vic_names.append(extract_span("VIC_NAME"))
-            pred_rep_names.append(extract_span("REP_NAME"))
+            res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+            pred_locs.append(res["locations"])
+            pred_phones.append(res["phones"])
+            pred_urls.append(res["urls"])
+            pred_coords.append(res["coords"])
+            pred_vic_names.append(res["victim_names"])
+            pred_rep_names.append(res["reporter_names"])
             
         return {
             "locations": pred_locs,
@@ -953,24 +1045,13 @@ class BiLSTM_CRF_Tagger:
                     cur = e
                     spans.append((s, e))
                     
-                def extract_span(target_type: str) -> str:
-                    idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
-                    if target_type == "LOC":
-                        while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                            idx.pop(0)
-                    if idx:
-                        s_c = spans[idx[0]][0]
-                        e_c = spans[idx[-1]][1]
-                        raw_span = text_str[s_c:e_c].strip()
-                        return clean_extracted_span(raw_span, target_type)
-                    return ""
-                    
-                pred_locs.append(extract_span("LOC"))
-                pred_phones.append(extract_span("PHONE"))
-                pred_urls.append(extract_span("URL"))
-                pred_coords.append(extract_span("COORDS"))
-                pred_vic_names.append(extract_span("VIC_NAME"))
-                pred_rep_names.append(extract_span("REP_NAME"))
+                res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+                pred_locs.append(res["locations"])
+                pred_phones.append(res["phones"])
+                pred_urls.append(res["urls"])
+                pred_coords.append(res["coords"])
+                pred_vic_names.append(res["victim_names"])
+                pred_rep_names.append(res["reporter_names"])
                 
         return {
             "locations": pred_locs,
@@ -1110,24 +1191,16 @@ class BiLSTM_CRF_Tagger:
             text_str = str(test_texts[t_idx] or "")
             spans_list = doc_spans[t_idx]
             
-            def extract_span(target_type: str) -> str:
-                idx = [i for i, (s, e, tok, tag) in enumerate(spans_list) if tag in (f"B-{target_type}", f"I-{target_type}")]
-                if target_type == "LOC":
-                    while idx and spans_list[idx[0]][2].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                        idx.pop(0)
-                if idx:
-                    s_c = spans_list[idx[0]][0]
-                    e_c = spans_list[idx[-1]][1]
-                    raw_span = text_str[s_c:e_c].strip()
-                    return clean_extracted_span(raw_span, target_type)
-                return ""
-                
-            pred_locs.append(extract_span("LOC"))
-            pred_phones.append(extract_span("PHONE"))
-            pred_urls.append(extract_span("URL"))
-            pred_coords.append(extract_span("COORDS"))
-            pred_vic_names.append(extract_span("VIC_NAME"))
-            pred_rep_names.append(extract_span("REP_NAME"))
+            tokens = [x[2] for x in spans_list]
+            spans = [(x[0], x[1]) for x in spans_list]
+            preds = [x[3] for x in spans_list]
+            res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+            pred_locs.append(res["locations"])
+            pred_phones.append(res["phones"])
+            pred_urls.append(res["urls"])
+            pred_coords.append(res["coords"])
+            pred_vic_names.append(res["victim_names"])
+            pred_rep_names.append(res["reporter_names"])
             
         return {
             "locations": pred_locs,
@@ -1487,24 +1560,16 @@ class Standard_LSTM_Tagger:
             text_str = str(test_texts[t_idx] or "")
             spans_list = doc_spans[t_idx]
             
-            def extract_span(target_type: str) -> str:
-                idx = [i for i, (s, e, tok, tag) in enumerate(spans_list) if tag in (f"B-{target_type}", f"I-{target_type}")]
-                if target_type == "LOC":
-                    while idx and spans_list[idx[0]][2].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                        idx.pop(0)
-                if idx:
-                    s_c = spans_list[idx[0]][0]
-                    e_c = spans_list[idx[-1]][1]
-                    raw_span = text_str[s_c:e_c].strip()
-                    return clean_extracted_span(raw_span, target_type)
-                return ""
-                
-            pred_locs.append(extract_span("LOC"))
-            pred_phones.append(extract_span("PHONE"))
-            pred_urls.append(extract_span("URL"))
-            pred_coords.append(extract_span("COORDS"))
-            pred_vic_names.append(extract_span("VIC_NAME"))
-            pred_rep_names.append(extract_span("REP_NAME"))
+            tokens = [x[2] for x in spans_list]
+            spans = [(x[0], x[1]) for x in spans_list]
+            preds = [x[3] for x in spans_list]
+            res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+            pred_locs.append(res["locations"])
+            pred_phones.append(res["phones"])
+            pred_urls.append(res["urls"])
+            pred_coords.append(res["coords"])
+            pred_vic_names.append(res["victim_names"])
+            pred_rep_names.append(res["reporter_names"])
             
         return {
             "locations": pred_locs,
@@ -1550,24 +1615,13 @@ class Standard_LSTM_Tagger:
                     cur = e
                     spans.append((s, e))
                     
-                def extract_span(target_type: str) -> str:
-                    idx = [i for i, tag in enumerate(preds) if tag in (f"B-{target_type}", f"I-{target_type}") and tokens[i].strip()]
-                    if target_type == "LOC":
-                        while idx and tokens[idx[0]].strip() in ("ที่", "อยู่ที่", "อยู่", "บริเวณ", "ตรง", "พื้นที่", "ตอนนี้", "ตอนนี้อยู่ที่"):
-                            idx.pop(0)
-                    if idx:
-                        s_c = spans[idx[0]][0]
-                        e_c = spans[idx[-1]][1]
-                        raw_span = text_str[s_c:e_c].strip()
-                        return clean_extracted_span(raw_span, target_type)
-                    return ""
-                    
-                pred_locs.append(extract_span("LOC"))
-                pred_phones.append(extract_span("PHONE"))
-                pred_urls.append(extract_span("URL"))
-                pred_coords.append(extract_span("COORDS"))
-                pred_vic_names.append(extract_span("VIC_NAME"))
-                pred_rep_names.append(extract_span("REP_NAME"))
+                res = extract_entity_spans_from_tokens(text_str, tokens, spans, preds)
+                pred_locs.append(res["locations"])
+                pred_phones.append(res["phones"])
+                pred_urls.append(res["urls"])
+                pred_coords.append(res["coords"])
+                pred_vic_names.append(res["victim_names"])
+                pred_rep_names.append(res["reporter_names"])
                 
         return {
             "locations": pred_locs,
